@@ -6,7 +6,7 @@ import ImageIO
 enum PaperArt {
     /// PNG-Kachel aus dem Bundle (aus Spike board-paper).
     static func loadNoiseTile() -> CGImage? {
-        guard let url = Bundle.module.url(forResource: "noise", withExtension: "png"),
+        guard let url = ResourceLocator.url(forResource: "noise", withExtension: "png"),
               let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(src, 0, nil)
     }
