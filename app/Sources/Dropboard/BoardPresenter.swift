@@ -285,6 +285,15 @@ final class BoardPresenter {
         return plan
     }
 
+    /// Beschnittmodus (E11): Mausbewegungen ohne gedrückte Taste nur, solange er offen ist (Cursor über Griffen/Bild).
+    /// Sonst keine Tracking-Area – im Ruhezustand bleibt die App still (Idle-CPU).
+    func setCropTracking(_ on: Bool) {
+        switch handoff {
+        case .twoPanels: boardView?.setMouseMovedTracking(on)
+        case .grow: earView.setMouseMovedTracking(on)   // grow: das Eselsohr-Panel ist das Board
+        }
+    }
+
     /// Liegt ein Bildschirmpunkt auf dem Eselsohr? (Ansichtsmodus: Klick dort schließt, auch bei grow,
     /// wo das Eselsohr-Panel selbst das Board ist.)
     func isOnEar(screenPoint p: NSPoint) -> Bool {

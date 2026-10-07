@@ -12,6 +12,8 @@ import DropboardCore
 /// Ansichtsmodus (Schritt 7, Details in ViewModeController):
 ///   idle ──Klick aufs Eselsohr / Menüleiste „Board öffnen“──▶ viewing ──Esc / Klick aufs Eselsohr──▶ viewClosing ──3 Frames Stop-Motion──▶ idle
 ///   In `viewing` landet ein fremder Drag (Bild) auf Eselsohr oder Board per Drop an Cursor; das Board bleibt offen.
+///   Beschnittmodus (E11) ist ein Unterzustand von `viewing` (CropController): Doppelklick öffnet, ein fremder Drag und
+///   endAllImmediately brechen ihn ab, ein Klick aufs Eselsohr übernimmt ihn und schließt dann den Ansichtsmodus.
 ///
 /// Phase 4 (Gruppe B): Entscheidungen in `DragRules`/`WatchdogRules` (DropboardConfig.swift, Selftest FixB).
 ///   C1  expanded: Eselsohr lehnt nicht mehr ab; ein Drop dort = Board-Drop an Cursor (Board liegt sichtbar darüber).
@@ -87,9 +89,14 @@ final class DragCoordinator: NSObject {
             openViewing(reason: "Klick aufs Eselsohr")
         case .viewing:
             if presenter.isOnEar(screenPoint: screen) {
+                // E11: Klick daneben übernimmt einen offenen Beschnitt; danach schließt der Ansichtsmodus wie bisher.
+                viewMode.commitCrop(reason: "Klick aufs Eselsohr")
                 closeViewing(reason: "Klick aufs Eselsohr")
             } else {
-                viewMode.mouseDown(at: presenter.boardPoint(fromScreen: screen))
+                // E11: clickCount 2 auf einem Bild öffnet den Beschnittmodus (der erste Klick hat schon ausgewählt).
+                // ⚠️ VERIFIZIEREN: NSEvent.clickCount zählt auch auf einem nicht aktivierenden Panel einer inaktiven App
+                // (Log `[CROP] Beschnitt geöffnet`).
+                viewMode.mouseDown(at: presenter.boardPoint(fromScreen: screen), clickCount: event.clickCount)
             }
         default:
             Log.line("[VIEW]", "Klick auf \(name(of: view)) ignoriert phase=\(phase.rawValue)")
@@ -98,7 +105,14 @@ final class DragCoordinator: NSObject {
 
     func mouseDragged(_ view: DropTargetView, _ event: NSEvent) {
         guard phase == .viewing else { return }
-        viewMode.mouseDragged(to: presenter.boardPoint(fromScreen: screenPoint(view, event)))
+        viewMode.mouseDragged(to: presenter.boardPoint(fromScreen: screenPoint(view, event)),
+                              shift: event.modifierFlags.contains(.shift))
+    }
+
+    /// Nur im Beschnittmodus (Tracking-Area, BoardPresenter.setCropTracking): Cursor über Griffen/Bild.
+    func mouseMoved(_ view: DropTargetView, _ event: NSEvent) {
+        guard phase == .viewing else { return }
+        viewMode.mouseMoved(at: presenter.boardPoint(fromScreen: screenPoint(view, event)))
     }
 
     func mouseUp(_ view: DropTargetView, _ event: NSEvent) {
@@ -436,6 +450,8 @@ final class DragCoordinator: NSObject {
 
     /// Fremder Drag, während der Ansichtsmodus offen ist: nur Bilder annehmen, kein Expand-Timer, kein Watchdog.
     private func viewDragEntered(_ view: DropTargetView, _ info: NSDraggingInfo, win: String, pos: String) -> NSDragOperation {
+        // E11: Ein fremder Drag bricht einen offenen Beschnitt ab; danach wie bisher annehmen.
+        viewMode.cancelCrop(reason: "fremder Drag")
         let seq = info.draggingSequenceNumber
         if seq != sessionSeq {
             sessionSeq = seq

@@ -43,6 +43,8 @@ final class ViewModeController {
     private(set) var selectedID: UUID?
     private var press: Press?
     private var openedAt: TimeInterval = 0
+    /// Beschnittmodus (E11), Unterzustand des Ansichtsmodus.
+    let crop: CropController
 
     init(presenter: BoardPresenter, board: BoardController, motion: MotionPreferences, diagnostics: Diagnostics) {
         self.presenter = presenter
@@ -50,6 +52,36 @@ final class ViewModeController {
         self.motion = motion
         self.diagnostics = diagnostics
         rng = SplitMix64(seed: UInt64(Date().timeIntervalSince1970 * 1000) &+ 0x5EED)
+        crop = CropController(presenter: presenter, board: board)
+        // Nach Übernehmen/Abbrechen bleibt das Bild ausgewählt (dünner Graphit-Rahmen wie vorher).
+        crop.onEnd = { [weak self] id in
+            self?.select(id, log: false)
+        }
+    }
+
+    // MARK: Beschnitt (E11)
+
+    var isCropping: Bool { crop.isActive }
+
+    /// Klick aufs Eselsohr im Beschnittmodus: erst übernehmen (Klick daneben), dann schließt der Ansichtsmodus.
+    func commitCrop(reason: String) {
+        guard crop.isActive else { return }
+        crop.commit(reason: reason, options: motionOptions)
+    }
+
+    /// Fremder Drag: Beschnitt abbrechen (Stop-Motion zurück), der Drop wird danach wie bisher angenommen.
+    func cancelCrop(reason: String) {
+        guard crop.isActive else { return }
+        crop.cancel(reason: reason, options: motionOptions)
+    }
+
+    private func openCrop(id: UUID) {
+        finishPress()
+        press = nil
+        select(nil, log: false)   // Auswahl-Rahmen aus; der Beschnittmodus hat seinen eigenen Rahmen
+        if !crop.begin(id: id, options: motionOptions) {
+            select(id, log: true)
+        }
     }
 
     /// Im Ansichtsmodus gilt Stop-Motion mit Jitter (Briefing: „Jitter nur nach dem Drop und im Ansichtsmodus“).
@@ -85,6 +117,7 @@ final class ViewModeController {
 
     /// Stop-Motion-Zuklappen (reveal rückwärts, 3 Frames), dann orderOut; `completion` danach.
     func close(reason: String, completion: @escaping @MainActor () -> Void) {
+        crop.endImmediately(reason: "Ansichtsmodus schließt (\(reason))")
         finishPress()
         select(nil, log: false)
         removeKeyMonitor()
@@ -105,6 +138,7 @@ final class ViewModeController {
 
     /// Ohne Animation beenden (z. B. Bildschirmwechsel).
     func endImmediately(reason: String) {
+        crop.endImmediately(reason: reason)
         finishPress()
         select(nil, log: false)
         removeKeyMonitor()
@@ -164,14 +198,27 @@ final class ViewModeController {
         defer { escWasDown = down }
         guard down && !escWasDown else { return }
         Log.line("[VIEW]", "Esc erkannt (Tastenzustand-Rückfallweg, kein Dropboard-Panel key) NSApp.isActive=\(NSApp.isActive)")
-        coordinator?.closeViewing(reason: "Esc (Tastenzustand)")
+        if crop.isActive {
+            crop.cancel(reason: "Esc (Tastenzustand)", options: motionOptions)   // E11: erst Beschnitt abbrechen
+        } else {
+            coordinator?.closeViewing(reason: "Esc (Tastenzustand)")
+        }
     }
 
     // MARK: Maus (Board-Koordinaten)
 
-    func mouseDown(at point: CGPoint) {
+    /// `clickCount` (E11): 2 auf einem Bild öffnet den Beschnittmodus; im Beschnittmodus geht alles an CropController.
+    func mouseDown(at point: CGPoint, clickCount: Int = 1) {
+        if crop.isActive {
+            crop.mouseDown(at: point, clickCount: clickCount, options: motionOptions)
+            return
+        }
         finishPress()
         let hit = board.hitItem(at: point)
+        if clickCount == 2, let id = hit {
+            openCrop(id: id)
+            return
+        }
         select(hit, log: true)
         if let id = hit, let item = board.item(id: id) {
             press = Press(id: id, startMouse: point, startCenter: item.center.cgPoint, lastMouse: point, dragging: false)
@@ -180,7 +227,11 @@ final class ViewModeController {
         }
     }
 
-    func mouseDragged(to point: CGPoint) {
+    func mouseDragged(to point: CGPoint, shift: Bool = false) {
+        if crop.isActive {
+            crop.mouseDragged(to: point, shift: shift)
+            return
+        }
         guard var p = press, let id = p.id else { return }
         p.lastMouse = point
         let dx = point.x - p.startMouse.x
@@ -199,11 +250,19 @@ final class ViewModeController {
     }
 
     func mouseUp(at point: CGPoint) {
+        if crop.isActive {
+            crop.mouseUp(at: point)
+            return
+        }
         if var p = press {
             p.lastMouse = point
             press = p
         }
         finishPress()
+    }
+
+    func mouseMoved(at point: CGPoint) {
+        crop.mouseMoved(at: point)
     }
 
     /// Ein laufendes Ziehen abschließen: Snap aufs Grid, neue Zufallsrotation, Stop-Motion-move, speichern.
@@ -277,6 +336,14 @@ final class ViewModeController {
 
     /// true = verbraucht (kein Beep, nicht weitergereicht).
     private func handleKey(_ event: NSEvent) -> Bool {
+        // E11: im Beschnittmodus Return/Enter/Esc/R; Backspace löscht dort NICHT.
+        if crop.isActive {
+            return crop.handleKey(event, windowName: windowName(event.window), options: motionOptions)
+        }
+        // Esc gedrückt gehalten nach dem Abbrechen eines Beschnitts: die Wiederholung schließt den Ansichtsmodus nicht.
+        if event.keyCode == 53 && event.isARepeat && Log.now - crop.lastEndedAt < 1.0 {
+            return true
+        }
         let key: String
         switch event.keyCode {
         case 53: key = "Esc"

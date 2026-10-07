@@ -7,7 +7,8 @@ import DropboardCore
 /// und eine Übersicht aller 4 Ecken auf hellen/dunklen Hintergründen als `<pfad ohne .png>-ear-sheet.png`.
 /// Kein Fenster, keine Systemberechtigung. Dekodiert synchron (es läuft kein Run-Loop).
 /// `--snapshot-demo`: vorher 5 Platzhalterbilder in ein TEMPORÄRES Board schreiben (nie in den echten Ordner),
-/// plus ein offener Platzhalter (Look bis zur Erfüllung eines Promise).
+/// plus ein offener Platzhalter (Look bis zur Erfüllung eines Promise) und ein beschnittenes Bild (E11, vier Farbfelder,
+/// Ausschnitt oben links). Mit Demo zusätzlich `<pfad ohne .png>-crop.png`: dasselbe Board mit diesem Bild im Beschnittmodus.
 @MainActor
 enum Snapshot {
     static func run(_ options: LaunchOptions) -> Bool {
@@ -50,8 +51,9 @@ enum Snapshot {
             for item in document.items {
                 let url = store.imageURL(fileName: item.fileName)
                 let pose = scene.pose(center: item.center.cgPoint, rotation: item.rotation)
-                if let decoded = ImageDecoder.decode(url: url, size: item.size.cgSize, scale: scale) {
-                    StopMotion.setModel(pose, on: scene.addImage(id: item.id, image: decoded.cgImage, size: decoded.size))
+                if let decoded = ImageDecoder.decode(url: url, size: item.size.cgSize, crop: item.crop, scale: scale) {
+                    StopMotion.setModel(pose, on: scene.addImage(id: item.id, image: decoded.cgImage, size: decoded.size,
+                                                                 crop: item.crop))
                 } else {
                     Log.line("[STORE]", "Snapshot: Bild fehlt/unlesbar \(item.fileName) → Platzhalter")
                     StopMotion.setModel(pose, on: scene.addPlaceholder(id: item.id, size: item.size.cgSize))
@@ -68,7 +70,25 @@ enum Snapshot {
             let boardURL = URL(fileURLWithPath: path)
             try renderPNG(scene.root, size: boardSize, scale: scale, to: boardURL)
             Log.line("[WIN]", "Snapshot Board geschrieben \(boardURL.path) \(Int(boardSize.width))x\(Int(boardSize.height))pt @\(scale)x "
-                + "items=\(scene.itemCount) abgedunkelt=\(scene.isDimmed)")
+                + "items=\(scene.itemCount) abgedunkelt=\(scene.isDimmed) beschnitten=\(document.items.filter { $0.crop != nil }.count)")
+
+            // E11: das (erste) beschnittene Bild im Beschnittmodus – gerade, ganzes Bild, außen abgedunkelt, Rahmen, Griffe.
+            if options.snapshotDemo, let cropped = document.items.first(where: { $0.crop != nil }) {
+                let editor = CropEditor(itemCenter: cropped.center.cgPoint, itemSize: cropped.size.cgSize,
+                                        crop: cropped.crop, rotation: 0)
+                StopMotion.batch {
+                    scene.bringToFront(id: cropped.id)
+                    scene.beginCropEditing(id: cropped.id, fullSize: editor.fullSize, crop: editor.crop)
+                    if let layer = scene.itemLayer(id: cropped.id) {
+                        StopMotion.setModel(scene.pose(center: editor.imageCenter, rotation: 0), on: layer)
+                    }
+                }
+                let cropURL = cropSnapshotURL(for: boardURL)
+                try renderPNG(scene.root, size: boardSize, scale: scale, to: cropURL)
+                Log.line("[CROP]", "Snapshot Beschnittmodus geschrieben \(cropURL.path) crop=\(BoardCrop.describe(cropped.crop)) "
+                    + "voll=\(Int(editor.fullSize.width))x\(Int(editor.fullSize.height))pt "
+                    + "contentsRectOriginTop=\(CropStyle.contentsRectOriginTop)")
+            }
 
             let earSize = CGSize(width: DropboardConfig.earSize, height: DropboardConfig.earSize)
             let corner = Settings().corner   // gespeicherte Ecke (Schritt 8), Standard oben rechts
@@ -101,6 +121,12 @@ enum Snapshot {
     static func earSnapshotURL(for url: URL) -> URL {
         let base = url.pathExtension.lowercased() == "png" ? url.deletingPathExtension() : url
         return base.deletingLastPathComponent().appendingPathComponent(base.lastPathComponent + "-ear.png")
+    }
+
+    /// `/x/board.png` → `/x/board-crop.png`
+    static func cropSnapshotURL(for url: URL) -> URL {
+        let base = url.pathExtension.lowercased() == "png" ? url.deletingPathExtension() : url
+        return base.deletingLastPathComponent().appendingPathComponent(base.lastPathComponent + "-crop.png")
     }
 
     /// `/x/board.png` → `/x/board-ear-sheet.png`
@@ -180,6 +206,21 @@ enum Snapshot {
             document.upsert(BoardItem(id: id, fileName: fileName, center: BoardPoint(center), rotation: rotation,
                                       size: BoardSize(size), addedAt: BoardClock.timestamp(),
                                       source: ItemSource(route: "demo")))
+        }
+        // E11: beschnittenes Demo-Bild. Volle Größe F = eingepasst (220 pt), sichtbar = Ausschnitt × F.
+        if let image = PaperArt.demoCropImage(),
+           let full = BoardLayout.fittedSize(pixelWidth: image.width, pixelHeight: image.height, longestEdge: metrics.longestEdge) {
+            let id = UUID()
+            let fileName = BoardStore.imageFileName(id: id, fileExtension: "png")
+            try PaperArt.writePNG(image, to: store.imageURL(fileName: fileName))
+            let crop = BoardCrop(x: 0.1, y: 0.1, width: 0.6, height: 0.6)
+            let size = CropMath.visibleSize(fullSize: full, crop: crop)
+            let center = BoardLayout.findFreeSlot(size: size, occupied: document.items.map { $0.frame }, area: area,
+                                                  grid: metrics.grid, gap: metrics.gap) ?? CGPoint(x: area.midX, y: area.midY)
+            let rotation = BoardLayout.randomTilt(range: metrics.tiltRange, using: &rng)
+            document.upsert(BoardItem(id: id, fileName: fileName, center: BoardPoint(center), rotation: rotation,
+                                      size: BoardSize(size), addedAt: BoardClock.timestamp(),
+                                      source: ItemSource(route: "demo"), crop: crop))
         }
         try store.save(document)
         Log.line("[STORE]", "Snapshot-Demo: \(document.items.count) Bilder in temporärem Board \(store.boardDirectory.path)")

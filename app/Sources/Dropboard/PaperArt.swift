@@ -145,6 +145,30 @@ enum PaperArt {
         }
     }
 
+    /// Beschnitt-Demo (E11, `--snapshot-demo`): 600×400 px in vier Feldern, oben links Terrakotta, oben rechts Senf,
+    /// unten links Stahlblau, unten rechts Flieder (gedämpft). So zeigt der Snapshot, welcher Teil beschnitten wurde und
+    /// ob contentsRect richtig herum liegt.
+    static func demoCropImage() -> CGImage? {
+        let pw = 600, ph = 400
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        let w = CGFloat(pw) / 2, h = CGFloat(ph) / 2
+        // Zeichen-Kontext: y nach oben → obere Bildhälfte = y ab h.
+        let fields: [(UInt32, CGRect)] = [
+            (0xC48B7A, CGRect(x: 0, y: h, width: w, height: h)),   // oben links
+            (0xB8A86B, CGRect(x: w, y: h, width: w, height: h)),   // oben rechts
+            (0x7C8DA8, CGRect(x: 0, y: 0, width: w, height: h)),   // unten links
+            (0x9A7F9E, CGRect(x: w, y: 0, width: w, height: h)),   // unten rechts
+        ]
+        for (hex, rect) in fields {
+            ctx.setFillColor(PaperStyle.cgColor(hex))
+            ctx.fill(rect)
+        }
+        return ctx.makeImage()
+    }
+
     /// CGImage → PNG-Datei.
     // ⚠️ VERIFIZIEREN: NSBitmapImageRep(cgImage:) kommt in keinem Spike vor (der Spike nutzt NSBitmapImageRep(data:)).
     static func writePNG(_ image: CGImage, to url: URL) throws {

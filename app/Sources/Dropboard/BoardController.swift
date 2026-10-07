@@ -59,10 +59,13 @@ final class BoardController: ImportSink {
         for item in items {
             let id = item.id
             let url = store.imageURL(fileName: item.fileName)
-            ImageDecoder.decodeInBackground(url: url, size: item.size.cgSize, scale: newScale, priority: .startup) { [weak self] decoded, _ in
-                guard let self = self, self.scene.scale == newScale, self.document.item(id: id) != nil,
+            ImageDecoder.decodeInBackground(url: url, size: item.size.cgSize, crop: item.crop, scale: newScale,
+                                            priority: .startup) { [weak self] decoded, _ in
+                guard let self = self, self.scene.scale == newScale, let current = self.document.item(id: id),
                       let decoded = decoded else { return }
-                self.scene.setImage(decoded.cgImage, size: decoded.size, for: id)
+                // E11: Die Bitmap ist das ganze Bild in voller Größe F; F bleibt beim Beschneiden gleich. Größe und
+                // Crop deshalb aus dem AKTUELLEN Item (könnte inzwischen beschnitten worden sein).
+                self.scene.setImage(decoded.cgImage, size: current.size.cgSize, crop: current.crop, for: id)
             }
         }
     }
@@ -122,10 +125,11 @@ final class BoardController: ImportSink {
             StopMotion.setModel(scene.pose(center: item.center.cgPoint, rotation: item.rotation), on: layer)
         }
         let id = item.id
-        ImageDecoder.decodeInBackground(url: url, size: size, scale: scene.scale, priority: .startup) { [weak self] decoded, _ in
+        let crop = item.crop
+        ImageDecoder.decodeInBackground(url: url, size: size, crop: crop, scale: scene.scale, priority: .startup) { [weak self] decoded, _ in
             guard let self = self else { return }
             if let decoded = decoded {
-                self.scene.setImage(decoded.cgImage, size: decoded.size, for: id)
+                self.scene.setImage(decoded.cgImage, size: decoded.size, crop: crop, for: id)
                 self.adoptDecodedSize(id: id, size: decoded.size)
             } else {
                 Log.line("[STORE]", "Bild nicht lesbar, Platzhalter bleibt id=\(id.uuidString)")
@@ -324,6 +328,36 @@ final class BoardController: ImportSink {
             guard let self = self, self.document.item(id: item.id) != nil else { return }
             self.showStoredItem(item)
         }
+    }
+
+    // MARK: Beschnitt (E11)
+
+    /// Item, das beschnitten werden kann: gespeichert, kein offener Platzhalter, Bild sichtbar. Sonst nil.
+    func croppableItem(id: UUID) -> BoardItem? {
+        guard pending[id] == nil, scene.hasImage(id: id) else { return nil }
+        return document.item(id: id)
+    }
+
+    /// Beschnitt übernehmen: neuer Crop, Größe und Mittelpunkt des Rahmens (sichtbarer Teil bleibt an Ort und Größe,
+    /// CropEditor.result), Mittelpunkt nur in die Ablagefläche geklemmt (kein Grid-Snap – das würde den Ausschnitt
+    /// verschieben), neue Zufallsrotation ±1–2° wie beim Ablegen. Stop-Motion-Settle (2 Frames: gerade → final mit
+    /// Kipp), Item oben im Stapel, atomisch gespeichert. Rückgabe fürs Log.
+    func applyCrop(id: UUID, crop: BoardCrop?, center: CGPoint, size: CGSize, options: PlanOptions)
+        -> (before: BoardItem, after: BoardItem, plan: StopMotionPlan, clamped: Bool)? {
+        guard let before = document.item(id: id), let layer = scene.itemLayer(id: id) else { return nil }
+        let target = BoardLayout.clampCenter(center, size: size, area: usableArea)
+        let rotation = BoardLayout.randomTilt(range: metrics.tiltRange, using: &rng)
+        let plan = CropSequences.settle(from: scene.pose(center: center, rotation: 0),
+                                        to: scene.pose(center: target, rotation: rotation), options: options, using: &rng)
+        StopMotion.batch {
+            scene.endCropEditing(id: id, size: size, crop: crop)
+            StopMotion.apply(plan, to: layer)
+        }
+        guard let after = CropEditing.apply(&document, id: id, crop: crop, center: target, size: size, rotation: rotation)
+        else { return nil }
+        save(reason: "Beschnitt \(id.uuidString) crop=\(BoardCrop.describe(after.crop)) "
+            + "größe=\(String(format: "%.1fx%.1f", after.size.width, after.size.height))pt mitte=\(fmt(target))")
+        return (before, after, plan, target != center)
     }
 
     // MARK: Hilfen

@@ -53,11 +53,15 @@ enum ImageDecoder {
     /// `size == nil`: längste Kante = LayoutMetrics.standard.longestEdge. Sonst `size` (gespeichertes Item),
     /// außer das Seitenverhältnis passt nicht zur orientierten Pixelgröße (alter Eintrag ohne EXIF-Drehung, C7):
     /// dann die korrigierte Größe (BoardLayout.reconciledSize). Der Aufrufer vergleicht `DecodedImage.size`.
-    static func decode(url: URL, size: CGSize?, scale: CGFloat) -> DecodedImage? {
+    /// Beschnitt (E11): `crop` = gespeicherter Ausschnitt des Items. `size` ist dann die Anzeigegröße des AUSSCHNITTS;
+    /// dekodiert wird trotzdem das ganze Bild, und zwar in voller Größe F × Scale (CropMath.decodeMaxPixel, höchstens
+    /// 4096 px), damit der Ausschnitt scharf ist und der Beschnittmodus das ganze Bild zeigen kann. Die Szene zeigt
+    /// den Ausschnitt per contentsRect.
+    static func decode(url: URL, size: CGSize?, crop: BoardCrop? = nil, scale: CGFloat) -> DecodedImage? {
         // ⚠️ VERIFIZIEREN: kCGImageSourceShouldCache=false verhindert, dass die Quelle die Voll-Bitmap cached.
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
         else { return nil }
-        return decode(source: source, size: size, scale: scale)
+        return decode(source: source, size: size, crop: crop, scale: scale)
     }
 
     /// Wie `decode(url:)`, aber aus Daten im Speicher (Weg imageData, Vorschau vor dem Schreiben – B2).
@@ -67,7 +71,7 @@ enum ImageDecoder {
         return decode(source: source, size: size, scale: scale)
     }
 
-    static func decode(source: CGImageSource, size: CGSize?, scale: CGFloat) -> DecodedImage? {
+    static func decode(source: CGImageSource, size: CGSize?, crop: BoardCrop? = nil, scale: CGFloat) -> DecodedImage? {
         guard CGImageSourceGetCount(source) > 0,
               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let rawWidth = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
@@ -80,15 +84,17 @@ enum ImageDecoder {
 
         let target: CGSize
         if let size = size, size.width > 0, size.height > 0 {
-            target = BoardLayout.reconciledSize(stored: size, orientedPixelWidth: oriented.width,
-                                                orientedPixelHeight: oriented.height)
+            // Ohne Crop exakt BoardLayout.reconciledSize (C7); mit Crop gegen das Seitenverhältnis des Ausschnitts.
+            target = CropMath.reconciledSize(stored: size, orientedPixelWidth: oriented.width,
+                                             orientedPixelHeight: oriented.height, crop: crop)
         } else if let fitted = BoardLayout.fittedSize(pixelWidth: oriented.width, pixelHeight: oriented.height,
                                                       longestEdge: LayoutMetrics.standard.longestEdge) {
             target = fitted
         } else {
             return nil
         }
-        let maxPixel = max(1, Int((max(target.width, target.height) * scale).rounded(.up)))
+        // Ohne Crop wie bisher: längste Kante der Anzeigegröße × Scale. Mit Crop: das ganze Bild in voller Größe F.
+        let maxPixel = CropMath.decodeMaxPixel(displaySize: target, crop: size == nil ? nil : crop, scale: Double(scale))
         // ⚠️ VERIFIZIEREN: kCGImageSourceShouldCacheImmediately dekodiert hier (Hintergrund) statt lazy beim
         // ersten Rendern auf dem Main Thread. Thumbnails werden nie über die Quellgröße hinaus vergrößert;
         // der Layer skaliert dann (contentsGravity .resize).
@@ -130,11 +136,11 @@ enum ImageDecoder {
     /// `.startup`: startupQueue (max. 3 parallel, .utility). `.drop`: importQueue (seriell, .userInitiated).
     // ⚠️ VERIFIZIEREN: OperationQueue.addOperation mit @Sendable-Block + Task { @MainActor } wie bisher bei GCD;
     // erwartet: im Swift-5-Modus keine Sendable-Warnung (alle Captures sind Sendable).
-    static func decodeInBackground(url: URL, size: CGSize?, scale: CGFloat, priority: Priority = .drop,
+    static func decodeInBackground(url: URL, size: CGSize?, crop: BoardCrop? = nil, scale: CGFloat, priority: Priority = .drop,
                                    completion: @escaping @MainActor @Sendable (DecodedImage?, String) -> Void) {
         let work: @Sendable () -> Void = {
             let start = Log.now
-            let decoded = ImageDecoder.decode(url: url, size: size, scale: scale)
+            let decoded = ImageDecoder.decode(url: url, size: size, crop: crop, scale: scale)
             let elapsed = Log.ms(since: start)
             Task { @MainActor in
                 completion(decoded, elapsed)

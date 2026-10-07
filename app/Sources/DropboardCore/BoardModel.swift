@@ -80,9 +80,13 @@ public struct BoardItem: Codable, Equatable, Identifiable, Sendable {
     /// Zeitpunkt des Drops, auf ganze Sekunden (siehe BoardClock)
     public var addedAt: Date
     public var source: ItemSource?
+    /// Beschnitt (E11): sichtbarer Ausschnitt, normiert im orientierten Bildraum (oben links). nil = ganzes Bild.
+    /// `size` ist dann die Anzeigegröße des AUSSCHNITTS. Abwärtskompatibel wie `source`: fehlt in alten Dateien
+    /// (decodeIfPresent → nil) und wird bei nil nicht geschrieben (encodeIfPresent).
+    public var crop: BoardCrop?
 
     public init(id: UUID, fileName: String, center: BoardPoint, rotation: Double, size: BoardSize,
-                addedAt: Date, source: ItemSource? = nil) {
+                addedAt: Date, source: ItemSource? = nil, crop: BoardCrop? = nil) {
         self.id = id
         self.fileName = fileName
         self.center = center
@@ -90,6 +94,7 @@ public struct BoardItem: Codable, Equatable, Identifiable, Sendable {
         self.size = size
         self.addedAt = addedAt
         self.source = source
+        self.crop = crop
     }
 
     /// Achsenparalleler Rahmen in Board-Koordinaten (Rotation unberücksichtigt, siehe LayoutMetrics.gap).

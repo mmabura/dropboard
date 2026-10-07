@@ -1,7 +1,7 @@
 import AppKit
 
 // Übernommen aus spikes/eselsohr-drop/Sources/eselsohr-drop/Log.swift (Pfad und Kopf angepasst).
-// Tags: [WIN] [PB] [DROP] [HANDOFF] [FOCUS] [MOTION] [STORE] [VIEW] (Ansichtsmodus) [SETTINGS] (Menüleiste, Einstellungen, Hotkey)
+// Tags: [WIN] [PB] [DROP] [HANDOFF] [FOCUS] [MOTION] [STORE] [VIEW] (Ansichtsmodus) [CROP] (Beschnitt, E11) [SETTINGS] (Menüleiste, Einstellungen, Hotkey)
 
 /// Thread-sicheres Logging: jede Zeile mit ISO-Zeitstempel (ms) in ~/Library/Logs/Dropboard/dropboard.log, auf
 /// stdout nur, wenn stdout ein Terminal ist oder DROPBOARD_VERBOSE=1 gesetzt ist. Wird auch von der Promise-Queue

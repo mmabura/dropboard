@@ -66,6 +66,26 @@ final class DropTargetView: NSView {
     override func mouseDragged(with event: NSEvent) { coordinator?.mouseDragged(self, event) }
     override func mouseUp(with event: NSEvent) { coordinator?.mouseUp(self, event) }
 
+    // Beschnittmodus (E11): Cursor über Griffen/Bild. Tracking-Area nur, solange der Beschnittmodus offen ist.
+    private var mouseMovedTracking: NSTrackingArea?
+
+    func setMouseMovedTracking(_ on: Bool) {
+        if on {
+            guard mouseMovedTracking == nil else { return }
+            // ⚠️ VERIFIZIEREN: .activeAlways liefert mouseMoved auch bei inaktiver App an ein nicht aktivierendes Panel
+            // (ohne acceptsMouseMovedEvents am Fenster). Fällt es aus, wechselt der Cursor nur beim Klicken (mouseDown/Up).
+            let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect],
+                                      owner: self, userInfo: nil)
+            addTrackingArea(area)
+            mouseMovedTracking = area
+        } else if let area = mouseMovedTracking {
+            removeTrackingArea(area)
+            mouseMovedTracking = nil
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) { coordinator?.mouseMoved(self, event) }
+
     // MARK: NSDraggingDestination (Signaturen wie Spike)
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { coordinator?.dragEntered(self, sender) ?? [] }

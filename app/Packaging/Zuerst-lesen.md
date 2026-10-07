@@ -31,6 +31,12 @@ Per Dropbox synchronisierte Kopien sollten meist ohne diese Sperre starten.
 - Bild (Finder, Safari, Screenshot-Vorschau) aufs Eselsohr ziehen und sofort loslassen = schnell ablegen.
 - Bild aufs Eselsohr ziehen und kurz halten = das Board klappt auf; dort an der gewünschten Stelle loslassen.
 - Klick aufs Eselsohr = Ansichtsmodus (Board ansehen, ohne etwas abzulegen). Schließen mit Esc oder erneutem Klick.
+  - Bild ziehen = umsortieren; Bild anklicken und Backspace = löschen.
+  - **Doppelklick auf ein Bild = beschneiden.** Das ganze Bild erscheint gerade, außerhalb des Rahmens abgedunkelt.
+    An den Ecken und Kanten ziehen ändert den Ausschnitt (mit gedrückter ⇧-Taste bleibt das Seitenverhältnis),
+    im Rahmen ziehen verschiebt das Bild darunter, **R** zeigt wieder das ganze Bild.
+    Übernehmen mit Return, Doppelklick oder Klick neben das Bild; Esc bricht ab.
+    Die Originaldatei bleibt unverändert, der Ausschnitt lässt sich jederzeit wieder ändern.
 - Menüleisten-Symbol (Blatt mit Eselsohr) anklicken:
   - „Board öffnen“ – wie ein Klick aufs Eselsohr.
   - „Eselsohr ausblenden“ – versteckt das Eselsohr, z. B. für Bildschirmaufnahmen und Präsentationen.

@@ -162,29 +162,126 @@ final class BoardScene {
         return layer
     }
 
+    /// `crop` (E11): Ausschnitt per contentsRect; `size` ist dann die Anzeigegröße des Ausschnitts.
     @discardableResult
-    func addImage(id: UUID, image: CGImage, size itemSize: CGSize) -> CALayer {
+    func addImage(id: UUID, image: CGImage, size itemSize: CGSize, crop: BoardCrop? = nil) -> CALayer {
         let layer = makeItemLayer(id: id, size: itemSize)
         layer.contents = image
+        applyCropGeometry(layer, size: itemSize, crop: crop)
         insert(layer, id: id)
         return layer
     }
 
     /// Platzhalter → Bild: hart eingesetzt, Mittelpunkt bleibt (Position/Transform werden nicht berührt,
-    /// eine laufende Stop-Motion-Sequenz läuft weiter).
-    func setImage(_ image: CGImage, size itemSize: CGSize, for id: UUID) {
+    /// eine laufende Stop-Motion-Sequenz läuft weiter). `crop` wie bei addImage.
+    /// Beschnittmodus (E11): Liegt das Item gerade im Beschnittmodus, gehört die Geometrie der Sitzung (ganzes Bild,
+    /// Overlay) – dann wird nur das Bild getauscht (z. B. Neu-Dekodieren nach Scale-Wechsel).
+    func setImage(_ image: CGImage, size itemSize: CGSize, crop: BoardCrop? = nil, for id: UUID) {
         guard let layer = itemLayers[id] else { return }
         withoutImplicitAnimations {
             layer.backgroundColor = nil
             layer.contents = image
-            layer.bounds = CGRect(origin: .zero, size: itemSize)
+        }
+        guard id != cropEditingID else { return }
+        applyCropGeometry(layer, size: itemSize, crop: crop)
+    }
+
+    func removeItem(id: UUID) {
+        if id == cropEditingID {
+            cropOverlay?.container.removeFromSuperlayer()
+            cropOverlay = nil
+            cropEditingID = nil
+        }
+        guard let layer = itemLayers.removeValue(forKey: id) else { return }
+        withoutImplicitAnimations { layer.removeFromSuperlayer() }
+    }
+
+    // MARK: Beschnitt (E11)
+
+    /// Item im Beschnittmodus (zeigt das ganze Bild mit Overlay), sonst nil.
+    private(set) var cropEditingID: UUID?
+    private var cropOverlay: CropOverlay?
+
+    /// Hat das Item ein Bild (kein Platzhalter)?
+    func hasImage(id: UUID) -> Bool { itemLayers[id]?.contents != nil }
+
+    /// Fürs Selftest: Overlay des Beschnittmodus.
+    var cropOverlayForTest: CropOverlay? { cropOverlay }
+
+    /// Geometrie für einen Ausschnitt: bounds = Anzeigegröße, contentsRect = Ausschnitt (CropMath, Ursprung laut
+    /// CropStyle.contentsRectOriginTop), harter Schatten folgt der beschnittenen Größe (shadowPath).
+    // ⚠️ VERIFIZIEREN: contentsRect zeigt bei CGImage-Contents den Ausschnitt mit contentsGravity .resize gestreckt auf bounds.
+    func applyCropGeometry(_ layer: CALayer, size: CGSize, crop: BoardCrop?) {
+        withoutImplicitAnimations {
+            layer.bounds = CGRect(origin: .zero, size: size)
+            layer.contentsRect = CropMath.contentsRect(crop, originTop: CropStyle.contentsRectOriginTop)
             layer.shadowPath = CGPath(rect: layer.bounds, transform: nil)
         }
     }
 
-    func removeItem(id: UUID) {
-        guard let layer = itemLayers.removeValue(forKey: id) else { return }
-        withoutImplicitAnimations { layer.removeFromSuperlayer() }
+    /// Item nach oben legen, laufende Stop-Motion-Sequenzen beenden. Rückgabe: bisheriger Stapel-Index (zum Zurücklegen).
+    @discardableResult
+    func bringToFront(id: UUID) -> Int? {
+        guard let layer = itemLayers[id] else { return nil }
+        let index = itemContainer.sublayers?.firstIndex { $0 === layer }
+        beginDirectManipulation(id: id)
+        return index
+    }
+
+    /// Item zurück an seinen Stapel-Index (Abbrechen des Beschnitts).
+    func restoreStackIndex(id: UUID, index: Int) {
+        guard let layer = itemLayers[id] else { return }
+        withoutImplicitAnimations {
+            layer.removeFromSuperlayer()
+            let count = itemContainer.sublayers?.count ?? 0
+            itemContainer.insertSublayer(layer, at: UInt32(min(max(0, index), count)))
+        }
+    }
+
+    /// Laufende Stop-Motion-Keyframes eines Items beenden (Model-Wert = sichtbarer Wert), z. B. bevor ein Griff-Drag
+    /// direkt der Maus folgt.
+    func stopItemAnimations(id: UUID) {
+        guard let layer = itemLayers[id] else { return }
+        withoutImplicitAnimations {
+            for key in layer.animationKeys() ?? [] where key.hasPrefix(StopMotion.keyPrefix) {
+                layer.removeAnimation(forKey: key)
+            }
+        }
+    }
+
+    /// Beschnittmodus zeigen: ganzes Bild (bounds = volle Größe F, contentsRect ganz, Schatten ums ganze Bild) und das
+    /// Overlay (Abdunklung außerhalb des Rahmens, Rahmen, 8 Griffe). Auswahl-Rahmen aus. Die Pose setzt der Aufrufer
+    /// (StopMotion.apply/setModel) in derselben Transaktion.
+    func beginCropEditing(id: UUID, fullSize: CGSize, crop: BoardCrop) {
+        guard let layer = itemLayers[id] else { return }
+        if let old = cropEditingID, old != id { endCropEditing(id: old, size: nil, crop: nil) }
+        cropOverlay?.container.removeFromSuperlayer()
+        cropEditingID = id
+        setSelected(false, id: id)
+        applyCropGeometry(layer, size: fullSize, crop: nil)
+        let overlay = CropOverlay(scale: scale)
+        overlay.layout(fullSize: fullSize, crop: crop)
+        withoutImplicitAnimations { layer.addSublayer(overlay.container) }
+        cropOverlay = overlay
+    }
+
+    /// Während Griff-/Pan-Drag: Overlay und Lage des ganzen Bildes direkt setzen (Model-Wert, gerade, keine
+    /// Animation, kein Jitter). `imageCenter` = Mitte des ganzen Bildes in Board-Koordinaten.
+    func updateCropEditing(id: UUID, fullSize: CGSize, crop: BoardCrop, imageCenter: CGPoint) {
+        guard id == cropEditingID, let layer = itemLayers[id] else { return }
+        cropOverlay?.layout(fullSize: fullSize, crop: crop)
+        StopMotion.setModel(pose(center: imageCenter, rotation: 0), on: layer)
+    }
+
+    /// Beschnittmodus beenden: Overlay weg; mit `size` die Geometrie des Ausschnitts setzen (Pose setzt der Aufrufer).
+    func endCropEditing(id: UUID, size: CGSize?, crop: BoardCrop?) {
+        if id == cropEditingID {
+            cropOverlay?.container.removeFromSuperlayer()
+            cropOverlay = nil
+            cropEditingID = nil
+        }
+        guard let size = size, let layer = itemLayers[id] else { return }
+        applyCropGeometry(layer, size: size, crop: crop)
     }
 
     // MARK: Ansichtsmodus (Schritt 7)
@@ -235,7 +332,7 @@ final class BoardScene {
                          "contents": null, "hidden": null, "onOrderIn": null, "onOrderOut": null, "sublayers": null,
                          "backgroundColor": null, "shadowPath": null, "shadowOpacity": null,
                          "shadowOffset": null, "shadowRadius": null, "shadowColor": null,
-                         "borderWidth": null, "borderColor": null]
+                         "borderWidth": null, "borderColor": null, "contentsRect": null]
         return layer
     }
 }

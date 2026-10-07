@@ -2,7 +2,7 @@
 
 Zusammenführung der drei Spikes (`spikes/eselsohr-drop`, `spikes/board-paper`, `spikes/stopmotion`) zu einer App:
 Eselsohr oben rechts, Drop-Annahme, Quick-Drop mit Speicherung, Board aus Papier, Realtime-Expand per Drag-Hover,
-Stop-Motion nach dem Drop, Ansichtsmodus, Menüleisten-Symbol mit Einstellungen (Schritt 8). Grundlage: `docs/briefing.md`, `docs/entscheidungen.md` (E1–E10), `docs/phase0/`.
+Stop-Motion nach dem Drop, Ansichtsmodus, Menüleisten-Symbol mit Einstellungen (Schritt 8), Beschnitt per Doppelklick (E11). Grundlage: `docs/briefing.md`, `docs/entscheidungen.md` (E1–E11), `docs/phase0/`.
 
 **Status (7. Okt. 2026, Version 0.1.24, Commit ebf8359):** baut auf dem Mac mini (macOS 26.5.1, Swift 6.1.2, nur Command
 Line Tools) ohne Fehler und Warnungen, `--selftest` 323/323 PASS, Universal-App ad-hoc signiert, startet und ist im Idle
@@ -31,16 +31,16 @@ Dock-Icon (`.accessory`) und aktiviert sich nie.
 | `--handoff two-panels\|grow` | Übergabe der Drag-Session ans Board. Default `two-panels` (`DropboardConfig.defaultHandoff`), weil T4 auf Hardware offen ist. |
 | `--board-dir <pfad>` | Anderer Board-Ordner statt `~/Library/Application Support/Dropboard/Boards/default` (Tests). |
 | `--reduce-motion` | „Bewegung reduzieren“ erzwingen (zusätzlich zur Systemeinstellung, E2). |
-| `--selftest` | Stop-Motion-Planer (55 Spike-Tests) + Layout + Store + Ansichtsmodus (47) + Einstellungen (42). Kein Fenster. Exit 0/1. |
+| `--selftest` | Stop-Motion-Planer (55 Spike-Tests) + Layout + Store + Ansichtsmodus (47) + Einstellungen (42) + Fix A/B/C + Beschnitt (`crop…`, 107). Kein Fenster. Exit 0/1. |
 | `--snapshot <pfad.png>` | Board mit den gespeicherten Bildern offscreen per `CALayer.render(in:)` in Backing-Scale als PNG, dazu das Eselsohr als `<pfad ohne .png>-ear.png`. Dann Ende. |
-| `--snapshot-demo` | Mit `--snapshot`: 5 Platzhalterbilder (3 per Free-Slot-Finder, 2 per Cursor-Drop) plus ein offener Platzhalter in einem **temporären** Board (wird danach gelöscht; der echte Ordner bleibt unberührt). |
+| `--snapshot-demo` | Mit `--snapshot`: 5 Platzhalterbilder (3 per Free-Slot-Finder, 2 per Cursor-Drop), ein **beschnittenes** Bild (E11: vier Farbfelder, Ausschnitt `(0.1,0.1 0.6x0.6)`) plus ein offener Platzhalter in einem **temporären** Board (wird danach gelöscht; der echte Ordner bleibt unberührt). Zusätzlich `<pfad ohne .png>-crop.png`: dasselbe Board mit dem beschnittenen Bild im Beschnittmodus. |
 | `--snapshot-dimmed` | Mit `--snapshot`: abgedunkeltes Papier (Look während des Drags). |
 
 ## Ablage
 
 ```
 ~/Library/Application Support/Dropboard/Boards/default/
-  board.json            {"version":1,"items":[{id,fileName,center{x,y},rotation,size{width,height},addedAt,source{route,originalPath,originalName,app}}]}
+  board.json            {"version":1,"items":[{id,fileName,center{x,y},rotation,size{width,height},addedAt,source{route,originalPath,originalName,app},crop{x,y,width,height}}]}
   images/<uuid>.<ext>   Bildkopien
   incoming/<uuid>/      Zielordner für File-Promises (Datei wird danach nach images/ verschoben)
   trash/<uuid>.<ext>    im Ansichtsmodus gelöschte Bilder (verschoben, nicht gelöscht; entsteht beim ersten Löschen)
@@ -51,6 +51,9 @@ Dock-Icon (`.accessory`) und aktiviert sich nie.
 - Board-Koordinaten: pt, Ursprung **oben links** des Bildschirms, y nach unten (Lesereihenfolge). Rotation in Grad,
   positiv = gegen den Uhrzeigersinn (Core-Animation-Konvention). `addedAt` auf ganze Sekunden (ISO 8601).
 - `source.app` ist die vorderste App beim Drop (= Ursprungs-App, da Dropboard nie aktiv wird).
+- `crop` (E11, optional): sichtbarer Ausschnitt, normiert in [0, 1] im **orientierten** Bild (EXIF-Drehung angewandt),
+  Ursprung oben links. Fehlt = ganzes Bild; wird bei ganzem Bild nicht geschrieben (alte Dateien laden unverändert).
+  `size` ist dann die Anzeigegröße des Ausschnitts. Die Bilddatei bleibt unverändert.
 
 ## Architektur
 
@@ -63,6 +66,7 @@ Dock-Icon (`.accessory`) und aktiviert sich nie.
 | `StopMotion/*.swift` | `StopMotionClock`, `SplitMix64`, Jitter, `StopMotionPlanner`, `StopMotionSequences` | unverändert aus stopmotion |
 | `EarPlacement.swift` | `EarCorner` (4 Ecken), `EarGeometry` (Eselsohr-Rahmen im visibleFrame, äußere Ecke, Anker fürs Aufblättern), `ExpandDelay` (150/300/500/800 ms, Standard 300) | neu (Schritt 8) |
 | `BoardEditing.swift` | Ansichtsmodus-Logik: Treffer-Test (mit Rotation), Umsortieren/Löschen im Modell, Snap-Ziel, `ViewModeSequences` (Blatt auf/zu, 3 Frames), `BoardStore.moveImageToTrash` | neu (Schritt 7) |
+| `Crop.swift` | Beschnitt (E11): `BoardCrop`, `CropMath` (Klemmen, Mindestgröße, Griffe inkl. ⇧, Verschieben, „sichtbarer Teil bleibt an Ort“ mit Rotation, contentsRect, Dekodier-Zielgröße), `CropEditor` (Sitzung, Treffer-Test), `CropEditing` (Modell), `CropSequences` (Planer) | neu (E11) |
 | **Dropboard** (AppKit/QuartzCore) | | |
 | `main.swift` | Argumente, `--selftest`, `--snapshot`, App-Start (`MainActor.assumeIsolated`) | Muster aus eselsohr-drop |
 | `LaunchOptions.swift`, `DropboardConfig.swift` | Argumente; alle Verhaltens-Konstanten (E8 `dropCloseDelay`, E10 `defaultExpandDelayMs`, `defaultCorner`, Handoff-Default, Eselsohr-Geometrie, Watchdog) | neu / eselsohr-drop |
@@ -80,10 +84,12 @@ Dock-Icon (`.accessory`) und aktiviert sich nie.
 | `Panels.swift` | `DropboardPanel` (Panel-Konfig), `DropTargetView` (Layer-Hosting + NSDraggingDestination, Maus → DragCoordinator) | eselsohr-drop/Panels |
 | `Motion.swift` | **`RealtimeMotion`** und **`StopMotion`** (getrennt), `MotionPreferences` | stopmotion/Motion |
 | `ViewMotion.swift` | **`StopMotionSheet`**: Stop-Motion-Maske über dem Papier, Aufblättern/Zuklappen im Ansichtsmodus | neu (Schritt 7) |
-| `ViewModeController.swift` | Ansichtsmodus: Öffnen/Schließen, Auswahl, direktes Ziehen, Snap, Löschen, lokaler Key-Monitor, `[VIEW]`-Logs; `ViewModeStyle` | neu (Schritt 7) |
+| `ViewModeController.swift` | Ansichtsmodus: Öffnen/Schließen, Auswahl, direktes Ziehen, Snap, Löschen, lokaler Key-Monitor, `[VIEW]`-Logs; `ViewModeStyle`; Doppelklick → Beschnitt | neu (Schritt 7) |
+| `CropController.swift` | Beschnittmodus (E11): Öffnen/Übernehmen/Abbrechen/Zurücksetzen, Griff-/Pan-Drag, Tasten, Cursor, `[CROP]`-Logs | neu (E11) |
+| `CropPresentation.swift` | `CropStyle` (Look, `contentsRectOriginTop`), `CropOverlay` (Abdunklung, Rahmen, 8 Griffe im Item-Layer) | neu (E11) |
 | `PaperStyle.swift`, `PaperArt.swift` | Look-Konstanten; Noise-Kachel/-Tiling, Eselsohr-Bitmap, Demo-Bilder, PNG-Export | board-paper |
 | `Diagnostics.swift`, `Log.swift` | `[WIN]`/`[FOCUS]`-Logs; Logger, FileProbe | eselsohr-drop |
-| `Snapshot.swift`, `SelfTest*.swift` | Offscreen-PNG (Eselsohr in der gespeicherten Ecke); Selftest (`SelfTestViewMode.swift` = Teil 4, Ansichtsmodus; `SelfTestSettings.swift` = Teil 5, Ecken/Einstellungen) | neu / stopmotion |
+| `Snapshot.swift`, `SelfTest*.swift` | Offscreen-PNG (Eselsohr in der gespeicherten Ecke); Selftest (`SelfTestViewMode.swift` = Teil 4, Ansichtsmodus; `SelfTestSettings.swift` = Teil 5, Ecken/Einstellungen; `SelfTestCrop.swift` = Beschnitt) | neu / stopmotion |
 
 ### Realtime vs. Stop-Motion
 
@@ -121,6 +127,56 @@ kein Fokusraub) – greift automatisch, weil jeder Klick auf ein Bild/Papier das
 braucht Bedienungshilfen-Berechtigung, verworfen; (3) `NSApp.activate()` nur für die Dauer des Ansichtsmodus und danach
 die Ursprungs-App reaktivieren – echter Fokusraub (Menüleiste wechselt, Vollbild-Space-Risiko laut Report 02), nur als
 letzter Ausweg. Umgesetzt ist (1) als Rückfall, (3) nicht.
+
+### Beschnitt (E11)
+
+Doppelklick auf ein Bild im Ansichtsmodus öffnet den Beschnittmodus (der erste Klick wählt wie bisher aus). Nicht
+destruktiv: gespeichert wird nur `crop` in `board.json`, die Bilddatei bleibt unverändert. Der sichtbare Teil bleibt
+beim Beschneiden an Ort und Größe, wie Papier, das man zurechtschneidet.
+
+| Aktion | Verhalten | Pfad |
+|---|---|---|
+| Öffnen (Doppelklick auf ein Bild) | Item wird gerade (Rotation 0) und zeigt das ganze Bild, der bisher sichtbare Teil bleibt an seinem Ort. Außerhalb des Rahmens warm abgedunkelt (Graphit 0,55), Rahmen 1 pt Graphit, 8 quadratische Griffe (8 pt, Papier mit Graphit-Kante), kein Systemblau. Item liegt oben. | Stop-Motion `CropSequences.turn` (2 Frames: halb gerade + Jitter, dann gerade), Reduce Motion: sofort |
+| Griff ziehen (4 Ecken, 4 Kanten) | Gegenkante/-ecke bleibt fest, Bild bleibt liegen. Mindestens 24 pt bzw. 2 % des Bildes, nie über den Bildrand. ⇧ hält das Seitenverhältnis (Ecke: stärkere Achse bestimmt, Kante: andere Achse wächst um die Mitte). | direkt, keine Animation, kein Jitter |
+| Im Rahmen (oder auf dem abgedunkelten Bild) ziehen | Bild verschiebt sich unter dem festen Rahmen, begrenzt auf den Bildrand. | direkt, keine Animation, kein Jitter |
+| Übernehmen: Return/Enter, Doppelklick, Klick neben das Bild (auch aufs Eselsohr – danach schließt der Ansichtsmodus) | Neuer Crop, Größe = Rahmen, Mitte = Rahmenmitte (nur in die Ablagefläche geklemmt, kein Grid-Snap), neue Zufallsrotation ±1–2°, oben im Stapel, atomisch gespeichert. Ganzes Bild → `crop` fehlt. Unverändert → nichts gespeichert. | Stop-Motion `CropSequences.settle` (2 Frames: gerade + Jitter, final mit Kipp) |
+| Abbrechen: Esc | Ursprungszustand (Crop, Größe, Ort, Rotation, Stapelplatz); Ansichtsmodus bleibt offen. Esc ein zweites Mal schließt ihn wie bisher. | Stop-Motion `turn` zurück |
+| R | ganzes Bild (Rahmen = ganzes Bild), noch nicht übernommen | direkt |
+| Backspace/Entf | löscht im Beschnittmodus **nicht** | – |
+| Fremder Drag während des Beschnitts | Beschnitt abbrechen, Drop wie bisher annehmen | Stop-Motion |
+| Eckwechsel, Ausblenden, Bildschirmwechsel, Ansichtsmodus schließt | Beschnitt ohne Animation abbrechen (`endAllImmediately`) | keine Animation |
+
+Technik: Der Item-Layer zeigt den Ausschnitt per `contentsRect`; der harte Schatten (`shadowPath`) folgt der
+beschnittenen Größe. Dekodiert wird immer das ganze Bild in **voller Größe F** (= Item-Größe ÷ Crop) × Backing-Scale,
+höchstens 4096 px längste Kante (`CropMath.decodeMaxPixel`). F bleibt beim Beschneiden gleich, deshalb ist der
+Ausschnitt ohne Neu-Dekodieren scharf und der Beschnittmodus zeigt das ganze Bild scharf. Overlay (Abdunklung, Rahmen,
+Griffe) liegt als Sublayer im Item-Layer. Cursor: `resizeLeftRight`/`resizeUpDown` an Kanten, Fadenkreuz an Ecken
+(kein diagonaler Cursor vor macOS 15), `openHand`/`closedHand` im Bild; Mausbewegung über eine Tracking-Area nur,
+solange der Beschnittmodus offen ist (Idle bleibt still).
+
+⚠️ VERIFIZIEREN (Hardware): Ursprung von `contentsRect` (Konstante `CropStyle.contentsRectOriginTop = false`, der
+Selftest `crop contentsRect: …` meldet den gemessenen Ursprung – bei FAIL umstellen); `clickCount == 2` auf dem nicht
+aktivierenden Panel; Cursor und `mouseMoved` bei inaktiver App; `CALayer.render(in:)` beachtet `contentsRect`.
+
+#### Testschritte Beschnitt (Tag `[CROP]`)
+
+| # | Aktion | Erwartet (Log) | Prüfen (Auge) |
+|---|---|---|---|
+| 9 | Selftest und Snapshot | `swift run Dropboard --selftest` → alle `crop…`-Zeilen PASS, insbesondere `crop contentsRect: Ursprung laut CropStyle (originTop=false) zeigt den oberen Bildteil; gemessen: unten links …`. `.build/debug/Dropboard --snapshot /tmp/db.png --snapshot-demo` → `[WIN] Snapshot Board geschrieben … beschnitten=1`, `[CROP] Snapshot Beschnittmodus geschrieben /tmp/db-crop.png crop=(0.100,0.100 0.600x0.600) voll=220x147pt contentsRectOriginTop=false` | `/tmp/db.png`: ein Bild aus vier Farbfeldern, beschnitten: großes **Terrakotta**-Feld oben links, rechts ein Streifen Senf, unten ein Streifen Stahlblau, unten rechts eine kleine Ecke Flieder. Zeigt es oben Stahlblau/Flieder, liegt der contentsRect-Ursprung falsch. `/tmp/db-crop.png`: dasselbe Bild gerade und ganz, außerhalb des Rahmens warm abgedunkelt, 1-pt-Rahmen, 8 Papier-Griffe |
+| 9a | Öffnen | Ansichtsmodus (7), Bild einmal anklicken, dann doppelklicken | `[VIEW] Auswahl id=…`, `[CROP] Beschnitt geöffnet id=… datei=… crop=ganz größe=220.0x147.0pt voll=220.0x147.0pt mitte=(…) rotation=1.37°→0° StopMotion turn frames=2 duration=0.333s animated=true jitter=true reduceMotion=false` | 2 harte Frames: halb gerade, dann gerade; ganzes Bild, Rahmen ums ganze Bild, Griffe; Menüleiste bleibt bei der vorderen App |
+| 9b | Kante ziehen | rechte Kante nach links ziehen | `[CROP] Griff right Start id=… crop=ganz (folgt der Maus direkt, ohne Jitter)`, beim Loslassen `[CROP] Griff right Ende id=… crop=ganz→(0.000,0.000 0.6..x1.000) rahmen=…pt mitte=(…) – noch nicht übernommen` | Rahmen folgt der Maus ohne Zittern/Verzögerung, rechts davon abgedunkelt; Cursor ↔ (falls nicht: `[CROP] Cursor … weicht ab` – Befund, kein Gegenmittel) |
+| 9c | ⇧ + Ecke | Ecke unten rechts mit ⇧ ziehen | `[CROP] Griff bottomRight Start … ⇧ Seitenverhältnis`, `… Ende … (⇧)` | Seitenverhältnis des Rahmens bleibt; an der Bildkante stoppt er ohne Verzerrung |
+| 9d | Verschieben | im Rahmen ziehen | `[CROP] Verschieben Start …`, `[CROP] Verschieben Ende … crop=…→…` | Rahmen bleibt stehen, das Bild gleitet darunter, nie über den Rand hinaus; Cursor geschlossene Hand |
+| 9e | Übernehmen (Return) | Return | `[CROP] Taste Return fenster=board`, `[CROP] Beschnitt übernommen grund=Return id=… crop=ganz→(…) größe=220.0x147.0pt→…pt mitte=(…)→(…) rotation=0.00°→±1–2° StopMotion settle frames=2 duration=0.333s animated=true jitter=true offen=…ms`, `[STORE] gespeichert items=N … (Beschnitt <id> crop=(…) größe=…pt mitte=(…))` | der Ausschnitt bleibt genau dort und so groß, wo der Rahmen war; 2 harte Frames (gerade, dann leicht gekippt); bleibt ausgewählt. Neustart: gleicher Ausschnitt, scharf (`board.json` enthält `"crop"`) |
+| 9f | Übernehmen (Doppelklick / Klick daneben) | erneut öffnen, Rahmen ändern, im Bild doppelklicken; nochmal mit Klick aufs Papier neben dem Bild | `grund=Doppelklick` bzw. `grund=Klick daneben` | wie 9e; der Klick daneben wählt nichts anderes aus |
+| 9g | Abbrechen (Esc), zweites Esc | öffnen, Rahmen ändern, Esc, dann noch einmal Esc | `[CROP] Taste Esc fenster=board`, `[CROP] Beschnitt abgebrochen grund=Esc id=… crop bleibt ganz (verworfen: (…)) StopMotion turn frames=2 …`; beim zweiten Esc `[VIEW] Taste Esc …`, `[VIEW] Ansichtsmodus schließen grund=Esc …` | erstes Esc: Bild wieder wie vorher (Ort, Kipp, Stapelplatz), Ansichtsmodus bleibt offen; zweites Esc schließt |
+| 9h | R | öffnen (bereits beschnittenes Bild), R, dann Return | `[CROP] Taste R …`, `[CROP] Beschnitt zurückgesetzt id=… crop=(…)→ganz rahmen=…pt – noch nicht übernommen`, dann `Beschnitt übernommen … crop=(…)→ganz größe=…→…` | Rahmen springt aufs ganze Bild; nach Return ist das ganze Bild sichtbar, der vorher sichtbare Teil liegt am selben Ort; `board.json` ohne `"crop"` für dieses Bild |
+| 9i | Backspace | im Beschnittmodus Backspace | `[CROP] Taste Backspace im Beschnittmodus → nichts gelöscht` | nichts gelöscht |
+| 9j | Fremder Drag | Beschnittmodus offen, Finder-Bild aufs Board ziehen und loslassen | `[CROP] Beschnitt abgebrochen grund=fremder Drag …`, dann wie 7g `[VIEW] fremder Drag draggingEntered …`, `[VIEW] Drop im Ansichtsmodus …` | Beschnitt zurück, neues Bild landet, Board bleibt offen |
+| 9k | Eselsohr-Klick | Beschnittmodus offen, Rahmen ändern, Eselsohr anklicken | `[CROP] Beschnitt übernommen grund=Klick aufs Eselsohr …`, `[VIEW] Ansichtsmodus schließen grund=Klick aufs Eselsohr …` | übernommen, dann zu |
+| 9l | Eckwechsel/Ausblenden | Beschnittmodus offen, ⌃⌥⌘E (oder Menü → Ecke) | `[CROP] Beschnitt abgebrochen grund=Eselsohr ausgeblendet … ohne Animation …`, `[VIEW] Ansichtsmodus sofort geschlossen …` | nichts übernommen |
+| 9m | Reduce Motion | mit `--reduce-motion` 9a, 9e, 9g | `turn frames=1 duration=0.000s animated=false`, `settle frames=1 … animated=false` | alles sofort, kein Zittern |
+| 9n | Platzhalter | Doppelklick auf einen Platzhalter (Bild noch nicht geladen) | `[CROP] Beschnitt öffnen ignoriert id=… (Platzhalter oder Bild nicht geladen)` | bleibt ausgewählt, kein Beschnittmodus |
 
 ## Menüleiste und Einstellungen (Schritt 8)
 
