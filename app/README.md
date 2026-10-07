@@ -4,9 +4,11 @@ Zusammenführung der drei Spikes (`spikes/eselsohr-drop`, `spikes/board-paper`, 
 Eselsohr oben rechts, Drop-Annahme, Quick-Drop mit Speicherung, Board aus Papier, Realtime-Expand per Drag-Hover,
 Stop-Motion nach dem Drop, Ansichtsmodus, Menüleisten-Symbol mit Einstellungen (Schritt 8). Grundlage: `docs/briefing.md`, `docs/entscheidungen.md` (E1–E10), `docs/phase0/`.
 
-**Status: im Linux-Container geschrieben, nie kompiliert, nie ausgeführt.** Code, der wörtlich aus den Spikes stammt,
-ist auf dem Mac mini kompiliert. Neue, in keinem Spike belegte APIs sind mit `⚠️ VERIFIZIEREN` markiert
-(`grep -rn "VERIFIZIEREN" Sources`).
+**Status (7. Okt. 2026, Version 0.1.24, Commit ebf8359):** baut auf dem Mac mini (macOS 26.5.1, Swift 6.1.2, nur Command
+Line Tools) ohne Fehler und Warnungen, `--selftest` 323/323 PASS, Universal-App ad-hoc signiert, startet und ist im Idle
+still (0,0 % CPU). **Nicht von Hand getestet:** die Drag-Gesten auf echter Hardware. API-Annahmen, die nur Hardware
+bestätigen kann, sind mit `⚠️ VERIFIZIEREN` markiert (`grep -rn "VERIFIZIEREN" Sources`). Stand und offene Fragen:
+`docs/stand.md`.
 
 ## Build und Start
 
