@@ -22,7 +22,8 @@ final class DropboardPanel: NSPanel {
         level = .statusBar   // zuletzt setzen (Report 02, Hinweis zu isFloatingPanel)
     }
 
-    // Wie Spike: darf key werden (Klick), wird aber nie aktiviert. Der Ansichtsmodus (Schritt 7) braucht das für Esc.
+    // Wie Spike: darf key werden (Klick, makeKey), wird aber nie aktiviert. Der Ansichtsmodus (Schritt 7) braucht das
+    // für Esc und Backspace/Entf (lokaler Key-Monitor in ViewModeController).
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
@@ -53,7 +54,12 @@ final class DropTargetView: NSView {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func mouseDown(with event: NSEvent) { coordinator?.clicked(self) }
+    // Ansichtsmodus (Schritt 7): Klick aufs Eselsohr öffnet/schließt; auf dem Board Auswahl und Ziehen.
+    override func mouseDown(with event: NSEvent) { coordinator?.mouseDown(self, event) }
+    // ⚠️ VERIFIZIEREN: mouseDragged/mouseUp kommen in keinem Spike vor; erwartet: nach mouseDown auf einem nicht
+    // aktivierenden Panel einer inaktiven App laufen sie an dieselbe View (Log `[VIEW] Umsortieren Start`).
+    override func mouseDragged(with event: NSEvent) { coordinator?.mouseDragged(self, event) }
+    override func mouseUp(with event: NSEvent) { coordinator?.mouseUp(self, event) }
 
     // MARK: NSDraggingDestination (Signaturen wie Spike)
 

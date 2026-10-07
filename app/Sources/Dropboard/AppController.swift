@@ -7,7 +7,7 @@ import DropboardCore
 ///   BoardController     – Dokument, Platzierung, Import-Ergebnisse
 ///   ImageImporter       – Drop-Annahme (Promise → fileURL → Bilddaten → URL)
 ///   BoardPresenter      – Panels, Handoff, Realtime-Öffnen/Schließen
-///   DragCoordinator     – Zustandsautomat der Drag-Session
+///   DragCoordinator     – Zustandsautomat der Drag-Session und des Ansichtsmodus (ViewModeController)
 @MainActor
 final class AppController: NSObject, NSApplicationDelegate {
     private let options: LaunchOptions
@@ -100,6 +100,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     @objc private func screenParametersChanged(_ note: Notification) {
         guard let presenter = presenter else { return }
         let screen = presenter.ear.screen ?? ScreenGeometry.screenUnderMouse()
+        coordinator?.endViewingImmediately(reason: "Bildschirmparameter geändert")
         presenter.relayout(screen: screen)
         boardController?.usableArea = presenter.usableArea
         importer?.scale = screen.backingScaleFactor

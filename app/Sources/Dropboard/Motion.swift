@@ -4,7 +4,7 @@ import DropboardCore
 
 // Zwei klar getrennte Animationspfade (Briefing, „Motion: zwei Animationspfade“). Sie teilen sich keinen Code.
 //   RealtimeMotion – Werkzeug-Verhalten, während der Nutzer etwas trägt: CABasicAnimation, ~200 ms, kein Bounce.
-//   StopMotion     – Objekt-Verhalten nach dem Drop (und später im Ansichtsmodus): CAKeyframeAnimation .discrete,
+//   StopMotion     – Objekt-Verhalten nach dem Drop und im Ansichtsmodus (dort auch StopMotionSheet): CAKeyframeAnimation .discrete,
 //                    6 fps, Frames aus StopMotionCore (StopMotionPlanner/StopMotionSequences).
 // Kein Timer, kein DisplayLink: nach dem Commit läuft alles im Render-Server.
 // Übernommen aus spikes/stopmotion/Sources/stopmotion-demo/Motion.swift; RealtimeMotion um Anker und Zuklappen erweitert.

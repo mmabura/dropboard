@@ -5,7 +5,8 @@ import DropboardCore
 /// Fenster: Eselsohr-Panel (immer sichtbar) und Board (Handoff-Variante two-panels oder grow).
 /// Öffnen/Schließen mit dem Realtime-Pfad; der Stop-Motion-Pfad liegt bei den Items (BoardController).
 /// Nie NSApp.activate / makeKeyAndOrderFront: nur orderFrontRegardless/orderOut (Report 02).
-/// Für Schritt 7 (Ansichtsmodus) kommt hier `openForViewing()` dazu (Stop-Motion-Reveal, 3 Frames, ohne Abdunklung).
+/// Ansichtsmodus (Schritt 7): `openForViewing`/`closeViewing` mit dem Stop-Motion-Pfad (StopMotionSheet, 3 Frames),
+/// ohne Abdunklung; das Board-Panel wird dafür key (makeKey), die App wird nicht aktiviert.
 @MainActor
 final class BoardPresenter {
     let handoff: HandoffMode
@@ -23,6 +24,8 @@ final class BoardPresenter {
     private(set) var boardFrame: NSRect
     private(set) var usableArea: CGRect
     private(set) var isOpen = false
+    /// Ansichtsmodus offen (Board per Klick geöffnet, nicht per Drag)
+    private(set) var isViewing = false
     private var closeToken = 0
 
     init(handoff: HandoffMode, screen: NSScreen, scene: BoardScene, noiseTile: CGImage?) {
@@ -141,11 +144,94 @@ final class BoardPresenter {
                 growRoot.frame = CGRect(origin: .zero, size: earFrame.size)
                 scene.root.isHidden = true
                 earLayer.isHidden = false
+                // Ansichtsmodus hatte das Eselsohr als Ecke über das Board gelegt
+                earLayer.frame = CGRect(origin: .zero, size: earFrame.size)
+                earLayer.zPosition = 0
             }
         }
         RealtimeMotion.clear(scene.sheet)
+        StopMotionSheet.clear(scene.sheet)
         scene.setDimmed(false)
         isOpen = false
+        isViewing = false
+    }
+
+    // MARK: Ansichtsmodus (Schritt 7, Stop-Motion-Pfad)
+
+    /// Eselsohr-Rahmen in Layer-Koordinaten des Boards (y nach oben).
+    private var earRectInBoard: CGRect {
+        CGRect(x: earFrame.minX - boardFrame.minX, y: earFrame.minY - boardFrame.minY,
+               width: earFrame.width, height: earFrame.height)
+    }
+
+    /// Klick aufs Eselsohr: Board ohne Abdunklung öffnen, Aufblättern als Stop-Motion (3 Frames, reveal) aus der
+    /// Eselsohr-Ecke (Reduce Motion: sofort). Das Eselsohr bleibt sichtbar über dem Board (zum Schließen per Klick).
+    /// Das Board-Panel wird key (Esc/Backspace), die App wird NICHT aktiviert (kein NSApp.activate, kein
+    /// makeKeyAndOrderFront). Rückgabe: der abgespielte Plan (fürs Log).
+    @discardableResult
+    func openForViewing(options: PlanOptions, using rng: inout SplitMix64) -> StopMotionPlan {
+        closeToken += 1
+        isOpen = true
+        isViewing = true
+        scene.setDimmed(false)   // Papier im Ansichtsmodus nicht abgedunkelt
+        RealtimeMotion.clear(scene.sheet)
+        let plan = ViewModeSequences.open(target: StopMotionSheet.fullPose(anchor: anchor), options: options, using: &rng)
+        switch handoff {
+        case .twoPanels:
+            board?.setFrame(boardFrame, display: false)
+            StopMotionSheet.play(plan, on: scene.sheet, anchor: anchor, removeMaskAfter: true)
+            board?.orderFrontRegardless()
+            ear.orderFrontRegardless()   // gleiches Level, zuletzt nach vorn → Eselsohr liegt über dem Board
+            // ⚠️ VERIFIZIEREN: makeKey() auf einem nicht aktivierenden Panel einer inaktiven App macht es key
+            // (Tastatur) ohne die App zu aktivieren. Belegt ist nur: Klick macht das Panel key (Spike eselsohr-drop).
+            // Fällt es aus, bleibt das Eselsohr nach dem Klick key – der lokale Key-Monitor greift dann trotzdem.
+            board?.makeKey()
+        case .grow:
+            withoutImplicitAnimations {
+                growRoot.frame = CGRect(origin: .zero, size: boardFrame.size)
+                scene.root.isHidden = false
+                earLayer.frame = earRectInBoard
+                earLayer.zPosition = 1     // Eselsohr als Ecke über dem Papier
+                earLayer.isHidden = false
+            }
+            StopMotionSheet.play(plan, on: scene.sheet, anchor: anchor, removeMaskAfter: true)
+            ear.setFrame(boardFrame, display: true)
+            withoutImplicitAnimations { growRoot.frame = CGRect(origin: .zero, size: boardFrame.size) }
+            ear.makeKey()   // ⚠️ VERIFIZIEREN: wie oben (grow: das Eselsohr-Panel ist das Board)
+        }
+        return plan
+    }
+
+    /// Schließen: reveal rückwärts als Stop-Motion (3 Frames), dann orderOut. Reduce Motion: sofort.
+    /// `completion` nach dem Ausblenden. Rückgabe: der abgespielte Plan (fürs Log).
+    @discardableResult
+    func closeViewing(options: PlanOptions, using rng: inout SplitMix64,
+                      completion: @escaping @MainActor () -> Void) -> StopMotionPlan {
+        let plan = ViewModeSequences.close(target: StopMotionSheet.fullPose(anchor: anchor), options: options, using: &rng)
+        guard isOpen else {
+            completion()
+            return plan
+        }
+        guard plan.isAnimated else {
+            closeImmediately()
+            completion()
+            return plan
+        }
+        closeToken += 1
+        let token = closeToken
+        StopMotionSheet.play(plan, on: scene.sheet, anchor: anchor, removeMaskAfter: false)
+        afterDelay(plan.duration) { [weak self] in
+            guard let self = self, self.closeToken == token else { return }
+            self.closeImmediately()   // Model-Wert der Maske = „weg“, deshalb blitzt vor dem orderOut nichts auf
+            completion()
+        }
+        return plan
+    }
+
+    /// Liegt ein Bildschirmpunkt auf dem Eselsohr? (Ansichtsmodus: Klick dort schließt, auch bei grow,
+    /// wo das Eselsohr-Panel selbst das Board ist.)
+    func isOnEar(screenPoint p: NSPoint) -> Bool {
+        earFrame.contains(p)
     }
 
     // MARK: Bildschirmwechsel

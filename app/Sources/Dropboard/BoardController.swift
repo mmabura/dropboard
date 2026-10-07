@@ -3,7 +3,8 @@ import DropboardCore
 
 /// Hält das Board-Dokument, die Szene und die Platzierung. Speichert nach jeder Änderung atomisch.
 /// Kennt keine Fenster und keine Drag-Sessions (die liegen in BoardPresenter und DragCoordinator).
-/// Für Schritt 7 (Ansichtsmodus) kommen hier `moveItem`/`deleteItem` mit StopMotionSequences.move/.delete dazu.
+/// Ansichtsmodus (Schritt 7): Auswahl-Treffer, direktes Ziehen, Umsortieren (StopMotionSequences.move) und
+/// Löschen (StopMotionSequences.delete, Datei nach trash/) – Modell-Logik in DropboardCore.BoardEditing.
 @MainActor
 final class BoardController: ImportSink {
     enum Placement {
@@ -139,6 +140,75 @@ final class BoardController: ImportSink {
             document.upsert(item)
             save(reason: "Bild \(fileName) \(Int(image.size.width))x\(Int(image.size.height))pt mitte=\(fmt(item.center.cgPoint))")
         }
+    }
+
+    // MARK: Ansichtsmodus (Schritt 7)
+
+    func item(id: UUID) -> BoardItem? { document.item(id: id) }
+
+    /// Oberstes gespeichertes Bild unter `point` (Board-Koordinaten). Offene Platzhalter (Promise/Dekodieren)
+    /// und Items ohne Layer (Datei fehlte beim Laden) sind nicht wählbar.
+    func hitItem(at point: CGPoint) -> UUID? {
+        BoardEditing.hitTest(document.items.filter { scene.itemLayer(id: $0.id) != nil }, at: point)
+    }
+
+    /// Ziehen beginnt: Bild nach oben, laufende Sequenzen weg.
+    func beginDrag(id: UUID) {
+        scene.beginDirectManipulation(id: id)
+    }
+
+    /// Während des Ziehens: Model-Wert hart setzen (folgt der Maus direkt, kein Jitter, keine Animation).
+    func dragUpdate(id: UUID, center: CGPoint) {
+        guard let item = document.item(id: id), let layer = scene.itemLayer(id: id) else { return }
+        StopMotion.setModel(scene.pose(center: center, rotation: item.rotation), on: layer)
+    }
+
+    /// Loslassen: aufs Grid snappen, neue kleine Zufallsrotation, Stop-Motion-move von der gezogenen Position
+    /// zum Ziel. Speichert atomisch. Rückgabe: (vorher, nachher, Plan) für das Log.
+    func dropDragged(id: UUID, draggedCenter: CGPoint, options: PlanOptions) -> (from: BoardItem, to: BoardItem, plan: StopMotionPlan)? {
+        guard let before = document.item(id: id), let layer = scene.itemLayer(id: id) else { return nil }
+        let target = BoardEditing.snappedCenter(dragged: draggedCenter, size: before.size.cgSize, area: usableArea, grid: metrics.grid)
+        let rotation = BoardLayout.randomTilt(range: metrics.tiltRange, using: &rng)
+        let plan = StopMotionSequences.move(from: scene.pose(center: draggedCenter, rotation: before.rotation),
+                                            to: scene.pose(center: target, rotation: rotation),
+                                            options: options, using: &rng)
+        StopMotion.apply(plan, to: layer)
+        guard let after = BoardEditing.move(&document, id: id, to: target, rotation: rotation) else { return nil }
+        save(reason: "Umsortieren \(id.uuidString) mitte=\(fmt(target))")
+        return (before, after, plan)
+    }
+
+    /// Löschen: Stop-Motion-delete (2 Frames), Eintrag aus board.json, Bilddatei nach trash/. Kein Undo.
+    /// Rückgabe: (Item, Plan, Papierkorb-Pfad oder Fehlertext) für das Log.
+    func deleteItem(id: UUID, options: PlanOptions) -> (item: BoardItem, plan: StopMotionPlan, trash: String)? {
+        guard let current = document.item(id: id) else { return nil }
+        if let layer = scene.itemLayer(id: id) {
+            scene.setSelected(false, id: id)
+            let plan = StopMotionSequences.delete(from: scene.pose(center: current.center.cgPoint, rotation: current.rotation),
+                                                  options: options, using: &rng)
+            StopMotion.apply(plan, to: layer)   // Model-Wert = weg (opacity 0), danach Layer entfernen
+            let itemScene = scene
+            if plan.isAnimated {
+                afterDelay(plan.duration) { itemScene.removeItem(id: id) }
+            } else {
+                itemScene.removeItem(id: id)
+            }
+            return finishDelete(current, plan: plan)
+        }
+        return finishDelete(current, plan: StopMotionPlan(frames: [], keyTimes: [0, 1], duration: 0))
+    }
+
+    private func finishDelete(_ item: BoardItem, plan: StopMotionPlan) -> (item: BoardItem, plan: StopMotionPlan, trash: String) {
+        BoardEditing.delete(&document, id: item.id)
+        save(reason: "Löschen \(item.id.uuidString)")   // erst das Modell (atomisch), dann die Datei
+        let trash: String
+        do {
+            trash = try store.moveImageToTrash(fileName: item.fileName).path
+        } catch {
+            trash = "FEHLER \(error)"
+            Log.line("[STORE]", "Bilddatei nicht in den Papierkorb verschoben \(item.fileName): \(error)")
+        }
+        return (item, plan, trash)
     }
 
     // MARK: Hilfen

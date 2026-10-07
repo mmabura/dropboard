@@ -128,6 +128,30 @@ final class BoardScene {
         withoutImplicitAnimations { layer.removeFromSuperlayer() }
     }
 
+    // MARK: Ansichtsmodus (Schritt 7)
+
+    /// Auswahl-Hervorhebung ohne Systemblau: dünner Graphit-Rahmen auf dem Bild (ViewModeStyle).
+    func setSelected(_ selected: Bool, id: UUID) {
+        guard let layer = itemLayers[id] else { return }
+        // ⚠️ VERIFIZIEREN: CALayer.borderWidth/borderColor kommen in keinem Spike vor; Rahmen liegt über dem Bild, dreht mit.
+        withoutImplicitAnimations {
+            layer.borderWidth = selected ? ViewModeStyle.selectionBorderWidth : 0
+            layer.borderColor = selected
+                ? PaperStyle.cgColor(PaperStyle.graphiteHex, alpha: ViewModeStyle.selectionBorderAlpha) : nil
+        }
+    }
+
+    /// Gezogenes Bild nach oben legen und laufende Stop-Motion-Sequenzen beenden, damit es der Maus
+    /// direkt folgt (Model-Wert = sichtbarer Wert, keine Keyframes, kein Jitter).
+    func beginDirectManipulation(id: UUID) {
+        guard let layer = itemLayers[id] else { return }
+        withoutImplicitAnimations {
+            layer.removeAllAnimations()   // ⚠️ VERIFIZIEREN (nicht aus einem Spike): beendet laufende sm.-Keyframes sofort
+            layer.removeFromSuperlayer()
+            itemContainer.addSublayer(layer)
+        }
+    }
+
     private func insert(_ layer: CALayer, id: UUID) {
         itemLayers[id]?.removeFromSuperlayer()
         itemLayers[id] = layer
@@ -149,9 +173,10 @@ final class BoardScene {
         // Doppelt gesichert gegen implizite Animationen (Report 03, Abschnitt 3, Wege 1 und 2).
         let null = NSNull()
         layer.actions = ["position": null, "bounds": null, "transform": null, "opacity": null,
-                         "contents": null, "hidden": null, "onOrderIn": null, "sublayers": null,
+                         "contents": null, "hidden": null, "onOrderIn": null, "onOrderOut": null, "sublayers": null,
                          "backgroundColor": null, "shadowPath": null, "shadowOpacity": null,
-                         "shadowOffset": null, "shadowRadius": null, "shadowColor": null]
+                         "shadowOffset": null, "shadowRadius": null, "shadowColor": null,
+                         "borderWidth": null, "borderColor": null]
         return layer
     }
 }

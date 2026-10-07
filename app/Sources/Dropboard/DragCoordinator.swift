@@ -8,11 +8,13 @@ import DropboardCore
 ///                                          │ draggingExited ▶ idle                         ▼
 ///                                                                                       collapsing ──200 ms Realtime──▶ idle
 ///
-/// Schritt 7 (Ansichtsmodus) ergänzt `case viewing`: `clicked` öffnet dann über BoardPresenter.openForViewing().
+/// Ansichtsmodus (Schritt 7, Details in ViewModeController):
+///   idle ──Klick aufs Eselsohr──▶ viewing ──Esc / Klick aufs Eselsohr──▶ viewClosing ──3 Frames Stop-Motion──▶ idle
+///   In `viewing` landet ein fremder Drag (Bild) auf Eselsohr oder Board per Drop an Cursor; das Board bleibt offen.
 @MainActor
 final class DragCoordinator: NSObject {
     enum Phase: String {
-        case idle, hovering, expanded, collapsing, dropClosing
+        case idle, hovering, expanded, collapsing, dropClosing, viewing, viewClosing
     }
 
     private let presenter: BoardPresenter
@@ -20,6 +22,7 @@ final class DragCoordinator: NSObject {
     private let importer: ImageImporter
     private let motion: MotionPreferences
     private let diagnostics: Diagnostics
+    private let viewMode: ViewModeController
     private(set) var phase: Phase = .idle
 
     // Drag-Session / Expand (wie Spike)
@@ -34,6 +37,8 @@ final class DragCoordinator: NSObject {
     private var exitedInsideAt: TimeInterval?
     private var updateLoggedAfterExpand = Set<String>()
     private var pollTimer: Timer?
+    /// Ansichtsmodus: nimmt der aktuelle fremde Drag ein Bild mit? (in draggingEntered bestimmt)
+    private var viewDragAccepts = false
 
     init(presenter: BoardPresenter, board: BoardController, importer: ImageImporter,
          motion: MotionPreferences, diagnostics: Diagnostics) {
@@ -42,23 +47,68 @@ final class DragCoordinator: NSObject {
         self.importer = importer
         self.motion = motion
         self.diagnostics = diagnostics
+        viewMode = ViewModeController(presenter: presenter, board: board, motion: motion, diagnostics: diagnostics)
         super.init()
+        viewMode.coordinator = self
     }
 
-    // MARK: Klick (kein Drag)
+    // MARK: Maus (Klick aufs Eselsohr, Ansichtsmodus)
 
-    func clicked(_ view: DropTargetView) {
-        Log.line("[WIN]", "Klick auf \(name(of: view)) ohne Drag → Ansichtsmodus (Schritt 7) noch nicht implementiert")
-        diagnostics.logFocus("nach Klick")
+    func mouseDown(_ view: DropTargetView, _ event: NSEvent) {
+        let screen = screenPoint(view, event)
+        switch phase {
+        case .idle:
+            guard view.role == .ear else { return }
+            Log.line("[WIN]", "Klick auf \(name(of: view)) ohne Drag → Ansichtsmodus")
+            diagnostics.logFocus("nach Klick")
+            phase = .viewing
+            viewMode.open(reason: "Klick aufs Eselsohr")
+        case .viewing:
+            if presenter.isOnEar(screenPoint: screen) {
+                closeViewing(reason: "Klick aufs Eselsohr")
+            } else {
+                viewMode.mouseDown(at: presenter.boardPoint(fromScreen: screen))
+            }
+        default:
+            Log.line("[VIEW]", "Klick auf \(name(of: view)) ignoriert phase=\(phase.rawValue)")
+        }
+    }
+
+    func mouseDragged(_ view: DropTargetView, _ event: NSEvent) {
+        guard phase == .viewing else { return }
+        viewMode.mouseDragged(to: presenter.boardPoint(fromScreen: screenPoint(view, event)))
+    }
+
+    func mouseUp(_ view: DropTargetView, _ event: NSEvent) {
+        guard phase == .viewing else { return }
+        viewMode.mouseUp(at: presenter.boardPoint(fromScreen: screenPoint(view, event)))
+    }
+
+    /// Esc (über ViewModeController) oder Klick aufs Eselsohr.
+    func closeViewing(reason: String) {
+        guard phase == .viewing else { return }
+        phase = .viewClosing
+        viewMode.close(reason: reason) { [weak self] in
+            guard let self = self, self.phase == .viewClosing else { return }
+            self.phase = .idle
+        }
+    }
+
+    /// Bildschirmwechsel o. Ä.: Ansichtsmodus ohne Animation beenden (vor BoardPresenter.relayout aufrufen).
+    func endViewingImmediately(reason: String) {
+        guard phase == .viewing || phase == .viewClosing else { return }
+        viewMode.endImmediately(reason: reason)
+        phase = .idle
     }
 
     // MARK: Hilfen
 
     private var handoff: HandoffMode { presenter.handoff }
 
-    /// grow: nach dem Expand ist die Eselsohr-View selbst das Board.
+    /// grow: nach dem Expand ist die Eselsohr-View selbst das Board. Im Ansichtsmodus zählt auch das Eselsohr
+    /// (liegt bei two-panels über dem Board) als Board.
     private func isBoardTarget(_ view: DropTargetView) -> Bool {
-        view.role == .board || (handoff == .grow && presenter.isOpen)
+        view.role == .board || (handoff == .grow && presenter.isOpen) || phase == .viewing
     }
 
     private func name(of view: DropTargetView) -> String {
@@ -75,6 +125,11 @@ final class DragCoordinator: NSObject {
         return w.convertPoint(toScreen: info.draggingLocation)
     }
 
+    private func screenPoint(_ view: DropTargetView, _ event: NSEvent) -> NSPoint {
+        guard let w = view.window else { return NSEvent.mouseLocation }
+        return w.convertPoint(toScreen: event.locationInWindow)
+    }
+
     private func mouseMovedSinceExpand() -> Bool { NSEvent.mouseLocation != mouseAtExpand }
 
     /// Jitter nie während eines Drags: Stop-Motion-Optionen gibt es nur nach dem Drop.
@@ -87,6 +142,9 @@ final class DragCoordinator: NSObject {
     func dragEntered(_ view: DropTargetView, _ info: NSDraggingInfo) -> NSDragOperation {
         let win = name(of: view)
         let pos = fmt(screenPoint(view, info))
+        if phase == .viewing {
+            return viewDragEntered(view, info, win: win, pos: pos)
+        }
         if isBoardTarget(view) {
             guard phase == .expanded else {
                 Log.line("[HANDOFF]", "draggingEntered win=\(win) ignoriert phase=\(phase.rawValue)")
@@ -121,6 +179,7 @@ final class DragCoordinator: NSObject {
 
     func dragUpdated(_ view: DropTargetView, _ info: NSDraggingInfo) -> NSDragOperation {
         view.updateCount += 1
+        if phase == .viewing { return viewDragAccepts ? .copy : [] }
         guard isBoardTarget(view) else { return phase == .hovering ? .copy : [] }
         guard phase == .expanded else { return [] }
         boardReached = true
@@ -139,6 +198,11 @@ final class DragCoordinator: NSObject {
     func dragExited(_ view: DropTargetView, _ info: NSDraggingInfo?) {
         let win = name(of: view)
         let mouse = NSEvent.mouseLocation
+        if phase == .viewing {
+            Log.line("[HANDOFF]", "draggingExited win=\(win) phase=viewing maus=\(fmt(mouse)) (Board bleibt offen)")
+            view.updateCount = 0
+            return
+        }
         if !isBoardTarget(view) {
             if phase == .hovering {
                 cancelExpand()
@@ -172,8 +236,11 @@ final class DragCoordinator: NSObject {
         cancelExpand()
         let win = name(of: view)
         let boardWasOpen = phase == .expanded
+        let viewing = phase == .viewing
         let kind: String
-        if isBoardTarget(view) {
+        if viewing {
+            kind = "Drop im Ansichtsmodus"
+        } else if isBoardTarget(view) {
             kind = "Board-Drop"
         } else if boardWasOpen {
             kind = "Drop auf Eselsohr trotz offenem Board (Handoff fehlgeschlagen) → wie Board-Drop"
@@ -190,7 +257,12 @@ final class DragCoordinator: NSObject {
 
         let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let tickets = importer.receive(info, app: app)
-        if boardWasOpen {
+        if viewing {
+            // Drop an Cursor, Stop-Motion-Drop mit Jitter; das Board bleibt im Ansichtsmodus offen.
+            let cursor = presenter.boardPoint(fromScreen: dropScreen)
+            board.place(tickets, placement: .atCursor(cursor), dropMotion: viewMode.motionOptions)
+            Log.line("[VIEW]", "Drop im Ansichtsmodus bilder=\(tickets.count) cursor=\(fmt(cursor)) → Board bleibt offen")
+        } else if boardWasOpen {
             stopPolling()
             phase = .dropClosing
             let cursor = presenter.boardPoint(fromScreen: dropScreen)
@@ -228,6 +300,21 @@ final class DragCoordinator: NSObject {
     }
 
     @objc private func logFocusAfterDrop() { diagnostics.logFocus("500ms nach Drop") }
+
+    /// Fremder Drag, während der Ansichtsmodus offen ist: nur Bilder annehmen, kein Expand-Timer, kein Watchdog.
+    private func viewDragEntered(_ view: DropTargetView, _ info: NSDraggingInfo, win: String, pos: String) -> NSDragOperation {
+        let seq = info.draggingSequenceNumber
+        if seq != sessionSeq {
+            sessionSeq = seq
+            dropReceived = false
+            Log.line("[HANDOFF]", "neue Drag-Session seq=\(seq) (Ansichtsmodus)")
+            importer.dumpPasteboard(info, phase: "draggingEntered", window: win)
+        }
+        viewDragAccepts = importer.looksLikeImage(info)
+        Log.line("[VIEW]", "fremder Drag draggingEntered win=\(win) pos=\(pos) bild=\(viewDragAccepts)"
+            + (viewDragAccepts ? " → Drop an Cursor" : " → abgelehnt"))
+        return viewDragAccepts ? .copy : []
+    }
 
     // MARK: Expand / Zuklappen / Schließen
 

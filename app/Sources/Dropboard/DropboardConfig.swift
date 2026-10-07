@@ -32,6 +32,10 @@ enum DropboardConfig {
     static let exitInsideGrace: TimeInterval? = 0.3
     static let noEnterWarnAfter: TimeInterval = 1.0
     static let updateLogInterval: TimeInterval = 0.25
+
+    // Ansichtsmodus (Schritt 7)
+    /// Ab dieser Mausbewegung (pt) wird aus einem Klick auf ein Bild ein Ziehen (Umsortieren).
+    static let viewDragThreshold: CGFloat = 3
 }
 
 /// Rahmen aus der Bildschirmgeometrie (Eselsohr-Position wie Spike: visibleFrame, rechts eingerückt,

@@ -1,4 +1,4 @@
-# Dropboard – Prototyp (Phase 2, Briefing-Schritte 1–6)
+# Dropboard – Prototyp (Phase 2, Briefing-Schritte 1–7)
 
 Zusammenführung der drei Spikes (`spikes/eselsohr-drop`, `spikes/board-paper`, `spikes/stopmotion`) zu einer App:
 Eselsohr oben rechts, Drop-Annahme, Quick-Drop mit Speicherung, Board aus Papier, Realtime-Expand per Drag-Hover,
@@ -28,7 +28,7 @@ Beenden: Ctrl-C im Terminal (wird geloggt). Die App hat kein Dock-Icon (`.access
 | `--handoff two-panels\|grow` | Übergabe der Drag-Session ans Board. Default `two-panels` (`DropboardConfig.defaultHandoff`), weil T4 auf Hardware offen ist. |
 | `--board-dir <pfad>` | Anderer Board-Ordner statt `~/Library/Application Support/Dropboard/Boards/default` (Tests). |
 | `--reduce-motion` | „Bewegung reduzieren“ erzwingen (zusätzlich zur Systemeinstellung, E2). |
-| `--selftest` | Stop-Motion-Planer (55 Spike-Tests) + Layout + Store. Kein Fenster. Exit 0/1. |
+| `--selftest` | Stop-Motion-Planer (55 Spike-Tests) + Layout + Store + Ansichtsmodus (47). Kein Fenster. Exit 0/1. |
 | `--snapshot <pfad.png>` | Board mit den gespeicherten Bildern offscreen per `CALayer.render(in:)` in Backing-Scale als PNG, dazu das Eselsohr als `<pfad ohne .png>-ear.png`. Dann Ende. |
 | `--snapshot-demo` | Mit `--snapshot`: 5 Platzhalterbilder (3 per Free-Slot-Finder, 2 per Cursor-Drop) plus ein offener Platzhalter in einem **temporären** Board (wird danach gelöscht; der echte Ordner bleibt unberührt). |
 | `--snapshot-dimmed` | Mit `--snapshot`: abgedunkeltes Papier (Look während des Drags). |
@@ -40,6 +40,7 @@ Beenden: Ctrl-C im Terminal (wird geloggt). Die App hat kein Dock-Icon (`.access
   board.json            {"version":1,"items":[{id,fileName,center{x,y},rotation,size{width,height},addedAt,source{route,originalPath,originalName,app}}]}
   images/<uuid>.<ext>   Bildkopien
   incoming/<uuid>/      Zielordner für File-Promises (Datei wird danach nach images/ verschoben)
+  trash/<uuid>.<ext>    im Ansichtsmodus gelöschte Bilder (verschoben, nicht gelöscht; entsteht beim ersten Löschen)
 ```
 
 - `board.json` wird nach jeder Änderung atomisch geschrieben (`Data.write(.atomic)`) und beim Start geladen.
@@ -57,21 +58,24 @@ Beenden: Ctrl-C im Terminal (wird geloggt). Die App hat kein Dock-Icon (`.access
 | `BoardStore.swift` | Pfade, Laden, atomisches Speichern, Quarantäne, Dateinamen | neu |
 | `BoardLayout.swift` | `LayoutMetrics` (Grid 24, Abstand 12, Rand 48, Kante 220, Kipp 1–2°), Snap, Overlap, Free-Slot-Finder, Drop-Snap, Größen, Zufallskipp | neu, Werte aus board-paper |
 | `StopMotion/*.swift` | `StopMotionClock`, `SplitMix64`, Jitter, `StopMotionPlanner`, `StopMotionSequences` | unverändert aus stopmotion |
+| `BoardEditing.swift` | Ansichtsmodus-Logik: Treffer-Test (mit Rotation), Umsortieren/Löschen im Modell, Snap-Ziel, `ViewModeSequences` (Blatt auf/zu, 3 Frames), `BoardStore.moveImageToTrash` | neu (Schritt 7) |
 | **Dropboard** (AppKit/QuartzCore) | | |
 | `main.swift` | Argumente, `--selftest`, `--snapshot`, App-Start (`MainActor.assumeIsolated`) | Muster aus eselsohr-drop |
 | `LaunchOptions.swift`, `DropboardConfig.swift` | Argumente; alle Verhaltens-Konstanten (E8 `dropCloseDelay`, E10 `expandDelay`, Handoff-Default, Eselsohr-Geometrie, Watchdog) | neu / eselsohr-drop |
 | `AppController.swift` | baut die Teile zusammen, System-Beobachter (Spaces, Aktivierung, Bildschirm) | eselsohr-drop |
-| `DragCoordinator.swift` | Zustandsautomat `idle → hovering → expanded → dropClosing/collapsing → idle`, Expand-Timer, Watchdog | eselsohr-drop/AppController |
-| `BoardPresenter.swift` | Panels, Handoff two-panels/grow, Öffnen/Zuklappen (Realtime), sofortiges Schließen | eselsohr-drop |
-| `BoardController.swift` | Dokument, Platzierung (Quick-Drop/Cursor), Platzhalter → Bild, Speichern | neu |
+| `DragCoordinator.swift` | Zustandsautomat `idle → hovering → expanded → dropClosing/collapsing → idle` und `idle → viewing → viewClosing → idle`, Expand-Timer, Watchdog, Maus-Weiterleitung | eselsohr-drop/AppController |
+| `BoardPresenter.swift` | Panels, Handoff two-panels/grow, Öffnen/Zuklappen (Realtime), sofortiges Schließen; Ansichtsmodus öffnen/schließen (Stop-Motion, `makeKey`) | eselsohr-drop |
+| `BoardController.swift` | Dokument, Platzierung (Quick-Drop/Cursor), Platzhalter → Bild, Speichern; Treffer, Ziehen, Umsortieren, Löschen | neu |
 | `ImageImporter.swift` | Drop-Annahme Promise → fileURL (synchron) → Bilddaten → URL (nur Log), Pasteboard-Logs | eselsohr-drop/DropSaver |
 | `ImageDecoder.swift` | Bild lesen und auf Board-Größe rendern, im Hintergrund | board-paper/ImageLibrary.fit |
 | `BoardScene.swift` | Layer-Baum: Papier, Noise, Abdunklung, Bild-/Platzhalter-Layer mit hartem Schatten | board-paper/BoardView |
-| `Panels.swift` | `DropboardPanel` (Panel-Konfig), `DropTargetView` (Layer-Hosting + NSDraggingDestination) | eselsohr-drop/Panels |
+| `Panels.swift` | `DropboardPanel` (Panel-Konfig), `DropTargetView` (Layer-Hosting + NSDraggingDestination, Maus → DragCoordinator) | eselsohr-drop/Panels |
 | `Motion.swift` | **`RealtimeMotion`** und **`StopMotion`** (getrennt), `MotionPreferences` | stopmotion/Motion |
+| `ViewMotion.swift` | **`StopMotionSheet`**: Stop-Motion-Maske über dem Papier, Aufblättern/Zuklappen im Ansichtsmodus | neu (Schritt 7) |
+| `ViewModeController.swift` | Ansichtsmodus: Öffnen/Schließen, Auswahl, direktes Ziehen, Snap, Löschen, lokaler Key-Monitor, `[VIEW]`-Logs; `ViewModeStyle` | neu (Schritt 7) |
 | `PaperStyle.swift`, `PaperArt.swift` | Look-Konstanten; Noise-Kachel/-Tiling, Eselsohr-Bitmap, Demo-Bilder, PNG-Export | board-paper |
 | `Diagnostics.swift`, `Log.swift` | `[WIN]`/`[FOCUS]`-Logs; Logger, FileProbe | eselsohr-drop |
-| `Snapshot.swift`, `SelfTest*.swift` | Offscreen-PNG; Selftest | neu / stopmotion |
+| `Snapshot.swift`, `SelfTest*.swift` | Offscreen-PNG; Selftest (`SelfTestViewMode.swift` = Teil 4, Ansichtsmodus) | neu / stopmotion |
 
 ### Realtime vs. Stop-Motion
 
@@ -81,15 +85,34 @@ Beenden: Ctrl-C im Terminal (wird geloggt). Die App hat kein Dock-Icon (`.access
 | keine Animation | `StopMotion.setModel` | Quick-Drop, Laden | Model-Wert hart gesetzt. |
 | Stop-Motion | `StopMotion.apply` + `StopMotionSequences.drop` | nach dem Drop aufs Board | 2 Frames à 1/6 s (groß ohne Kipp + Jitter, dann final mit Kipp), `CAKeyframeAnimation` `.discrete`, Start sofort (E1). Board schließt nach `dropCloseDelay` ≈ 333 ms (E8). Reduce Motion: 1 Frame, schließt sofort. |
 
-Jitter gibt es nur in `DragCoordinator.postDropMotionOptions()` und nur in der Phase `dropClosing` (nach dem Drop).
+Jitter gibt es nur in `DragCoordinator.postDropMotionOptions()` (nur in der Phase `dropClosing`, nach dem Drop) und in
+`ViewModeController.motionOptions` (Ansichtsmodus, nie während die Maus ein Bild zieht).
 Das Board ist während des Drags abgedunkelt (Graphit 0,35 über dem Papier, unter den Bildern) und bleibt es bis zum Schließen.
 
-### Ansichtsmodus (Schritt 7) – vorgesehene Erweiterung
+### Ansichtsmodus (Schritt 7)
 
-Ein Klick aufs Eselsohr loggt nur `Ansichtsmodus (Schritt 7) noch nicht implementiert`. Ergänzung ohne Umbau:
-`DragCoordinator.Phase.viewing` + `clicked` → `BoardPresenter.openForViewing()` (Stop-Motion-Reveal 3 Frames,
-`StopMotionSequences.reveal`, ohne Abdunklung); `BoardController.moveItem/deleteItem` mit `StopMotionSequences.move/delete`
-und `BoardDocument.upsert/remove`; Esc über einen lokalen Key-Monitor (Panels dürfen bereits key werden).
+Klick aufs Eselsohr (kein Drag) öffnet das Board zum Betrachten, Umsortieren und Löschen. Export gehört nicht
+zum Prototyp. Zustand im `DragCoordinator`: `idle → viewing → viewClosing → idle`; Interaktion in `ViewModeController`.
+
+| Aktion | Verhalten | Pfad |
+|---|---|---|
+| Öffnen (Klick aufs Eselsohr) | Papier **nicht** abgedunkelt; Aufblättern aus der Eselsohr-Ecke in 3 harten Frames (`StopMotionSequences.reveal`: Maske 0.6 → 0.85 → 1.0, mit Jitter). Das Eselsohr liegt danach als Ecke über dem Board. | Stop-Motion (`StopMotionSheet`), Reduce Motion: sofort |
+| Auswahl (Klick auf ein Bild) | dünner Graphit-Rahmen (1 pt, 85 %), kein Systemblau. Klick aufs Papier hebt die Auswahl auf. | keine Animation |
+| Umsortieren (Bild ziehen) | ab 3 pt Bewegung folgt das Bild der Maus direkt (Model-Wert, keine Keyframes, kein Jitter) und liegt oben. Beim Loslassen: Snap aufs 24-pt-Grid (wie Drop, in der Ablagefläche), neue Zufallsrotation ±1–2°, `StopMotionSequences.move` (2–4 Frames, mit Jitter). Danach oben im Stapel, gespeichert. | Stop-Motion nach dem Loslassen |
+| Löschen (Auswahl + Backspace/Entf) | `StopMotionSequences.delete` (2 Frames: kleiner, weg), Eintrag aus `board.json` (atomisch), Bilddatei nach `trash/`. Kein Undo. | Stop-Motion, Reduce Motion: sofort weg |
+| Schließen (Esc oder Klick aufs Eselsohr) | reveal rückwärts, 3 Frames, Start sofort (E1): 0.85 → 0.6 → weg, dann `orderOut`. | Stop-Motion, Reduce Motion: sofort |
+| Fremder Drag (Bild) während offen | landet per Drop an der Cursorposition (gesnappt, Stop-Motion-Drop mit Jitter), auch über dem Eselsohr; das Board **bleibt offen**. | Stop-Motion |
+
+Fokus: Das Board-Panel wird per `makeKey()` key, die App wird nie aktiviert (kein `NSApp.activate`, kein
+`makeKeyAndOrderFront`). Tasten kommen über einen lokalen Key-Monitor (Muster aus Spike eselsohr-drop), der für jedes
+Panel der App greift. ⚠️ VERIFIZIEREN: dass `makeKey()` auf einem nicht aktivierenden Panel einer inaktiven App Tasten
+liefert. Belegt ist nur, dass ein **Klick** das Panel key macht; der Klick aufs Eselsohr tut das bereits, deshalb
+erreichen Esc/Backspace die App auch dann, wenn `makeKey()` nichts bewirkt (Log `[VIEW] Taste … fenster=ear`).
+Alternativen, falls Tasten gar nicht ankommen, nach Fokusraub geordnet: (1) einmal ins Papier klicken (Panel wird key,
+kein Fokusraub) – greift automatisch, weil jeder Klick auf ein Bild/Papier das Board key macht; (2) globaler Monitor –
+braucht Bedienungshilfen-Berechtigung, verworfen; (3) `NSApp.activate()` nur für die Dauer des Ansichtsmodus und danach
+die Ursprungs-App reaktivieren – echter Fokusraub (Menüleiste wechselt, Vollbild-Space-Risiko laut Report 02), nur als
+letzter Ausweg. Umgesetzt ist (1) als Rückfall, (3) nicht.
 
 ## Manuelle Tests gegen die Interaktionstabelle
 
@@ -98,7 +121,7 @@ macOS-Version, Ergebnis, Logzeilen. Die erwarteten Zeilen sind Hypothesen, Abwei
 
 | # | Zeile der Interaktionstabelle / Schritt | Aktion | Erwartet (Log) | Prüfen (Auge) |
 |---|---|---|---|---|
-| 0 | Selftest/Snapshot | `swift run Dropboard --selftest`; `--snapshot /tmp/db.png --snapshot-demo`, dann mit `--snapshot-dimmed` | `N/N PASS`, Exit 0; `[WIN] Snapshot Board geschrieben … items=5`, `[WIN] Snapshot Eselsohr geschrieben …-ear.png` | PNG: Off-White + Noise, harte Schatten 1–2 px unten rechts, Kipp ±1–2°, ein leeres Platzhalter-Rechteck, Eselsohr als Papiereck |
+| 0 | Selftest/Snapshot | `swift run Dropboard --selftest`; `--snapshot /tmp/db.png --snapshot-demo`, dann mit `--snapshot-dimmed` | `143/143 PASS` (96 + 47 `view:`), Exit 0; `[WIN] Snapshot Board geschrieben … items=5`, `[WIN] Snapshot Eselsohr geschrieben …-ear.png` | PNG: Off-White + Noise, harte Schatten 1–2 px unten rechts, Kipp ±1–2°, ein leeres Platzhalter-Rechteck, Eselsohr als Papiereck |
 | 1 | Eselsohr (Schritt 1) | Start | `[WIN] Start Dropboard handoff=two-panels …`, `[WIN] Start ear … level=25 … visible=true`, `[WIN] Start board … visible=false`, `[FOCUS] Start … NSApp.isActive=false`, `[STORE] geladen items=…` | ca. 40 pt oben rechts, 12 pt eingerückt, knapp unter der Menüleiste, gedämpft, ohne Schatten, kein Dock-Icon |
 | 1b | Eselsohr still | beliebigen Drag starten, nicht aufs Eselsohr | keine Zeile | keine Reaktion, keine Idle-Animation |
 | 1c | über allen Fenstern | Space wechseln; Safari nativ Vollbild | `[WIN] Space-Wechsel ear … onActiveSpace=true visible=true` | Eselsohr auf jedem Space und über der Vollbild-App |
@@ -118,7 +141,15 @@ macOS-Version, Ergebnis, Logzeilen. Die erwarteten Zeilen sind Hypothesen, Abwei
 | 5h | grow | Start mit `--handoff grow`, 5–5f wiederholen | `Expand ausgelöst mode=grow`, `draggingUpdated (erstes nach Expand) win=ear(grown)`, `performDragOperation win=ear(grown) art=Board-Drop` | wie two-panels; danach Eselsohr wieder 40×40 |
 | 6 | Stop-Motion nach Drop (Schritt 6) | 5b mehrfach | `frames=2 … jitter=true`; nie `[MOTION] StopMotion` vor dem Drop | Frames hart getrennt (kein Lag-Eindruck), letzter Frame ruhig |
 | 6b | Bewegung reduzieren (E2) | Systemeinstellung umschalten (oder `--reduce-motion`), 5, 5b, 5d | `[MOTION] Bewegung reduzieren geändert: … effective=true`, `reveal animated=false dauer=0ms`, `StopMotion drop … frames=1 … animated=false`, `Board schließt in 0ms`, `collapse animated=false` | Board erscheint/verschwindet sofort, kein Jitter |
-| 7 | Klick aufs Eselsohr | klicken, ohne Drag | `[WIN] Klick auf ear ohne Drag → Ansichtsmodus (Schritt 7) noch nicht implementiert`, `[FOCUS] nach Klick … NSApp.isActive=false` | nichts öffnet sich; kein `!!! DROPBOARD SELBST AKTIVIERT` |
+| 7 | Klick aufs Eselsohr (Schritt 7) | TextEdit vorn, Eselsohr anklicken | `[WIN] Klick auf ear ohne Drag → Ansichtsmodus`, `[FOCUS] nach Klick … NSApp.isActive=false earKey=true`, `[VIEW] Ansichtsmodus geöffnet grund=Klick aufs Eselsohr mode=two-panels items=N StopMotion reveal frames=3 duration=0.500s animated=true jitter=true reduceMotion=false abgedunkelt=false`, `[WIN] Ansichtsmodus offen board … visible=true key=true`, `[FOCUS] Ansichtsmodus offen frontmost=com.apple.TextEdit … NSApp.isActive=false keyWindow=board … boardKey=true` | Papier blättert in 3 harten Schritten aus der Ecke auf, nicht abgedunkelt; Eselsohr bleibt als Ecke sichtbar; Menüleiste bleibt TextEdit; kein `!!! DROPBOARD SELBST AKTIVIERT`. **Befund**, falls `boardKey=false` – dann 7c prüfen |
+| 7b | Auswahl | Bild anklicken, dann Papier anklicken | `[VIEW] Auswahl id=… datei=… mitte=(…)`, dann `[VIEW] Auswahl aufgehoben (Klick aufs Papier)` | dünner Graphit-Rahmen, kein Blau; verschwindet wieder |
+| 7c | Esc schließt | Esc drücken | `[VIEW] Taste Esc fenster=board NSApp.isActive=false` (bei `fenster=ear` wirkte `makeKey()` nicht, Esc kam über das Eselsohr), `[VIEW] Ansichtsmodus schließen grund=Esc StopMotion reveal rückwärts frames=3 duration=0.500s`, `[VIEW] Ansichtsmodus geschlossen grund=Esc offen=…ms schließen=~500ms`, `[FOCUS] nach Ansichtsmodus frontmost=com.apple.TextEdit NSApp.isActive=false keyWindow=nil` | 3 harte Frames zur Ecke, dann weg. Danach tippen: Text landet in TextEdit. **Befund**: `WARNUNG nach Ansichtsmodus: Eselsohr ist key` oder Tippen kommt nicht in TextEdit an |
+| 7d | Klick aufs Eselsohr schließt | öffnen, Eselsohr erneut anklicken | `[VIEW] Ansichtsmodus schließen grund=Klick aufs Eselsohr …`, `… geschlossen grund=Klick aufs Eselsohr` | wie 7c |
+| 7e | Umsortieren | Bild ziehen und loslassen | `[VIEW] Auswahl id=…`, `[VIEW] Umsortieren Start id=… von=(…) (Bild folgt der Maus direkt, ohne Jitter)`, beim Loslassen `[VIEW] Umsortieren id=… von=(…) losgelassen=(…) nach=(…) rotation=a°→b° StopMotion move frames=2 duration=0.333s animated=true jitter=true`, `[STORE] gespeichert items=N … (Umsortieren …)` | während des Ziehens klebt das Bild ohne Zittern/Verzögerung am Cursor und liegt oben; nach dem Loslassen 2 harte Frames auf den Grid-Punkt, neuer leichter Kipp. Neustart: Position, Kipp, Stapel bleiben |
+| 7f | Löschen | Bild anklicken, Backspace (dann ein zweites mit Entf/fn-Backspace) | `[VIEW] Taste Backspace fenster=…`, `[VIEW] Löschen id=… taste=Backspace datei=<uuid>.<ext> StopMotion delete frames=2 duration=0.333s animated=true papierkorb=…/trash/<uuid>.<ext> items=N-1`, `[STORE] gespeichert items=N-1 … (Löschen …)` | 2 harte Frames (kleiner, weg); Datei in `trash/`, nicht mehr in `images/`; `board.json` ohne Eintrag. Backspace ohne Auswahl: `[VIEW] Backspace ohne Auswahl → nichts gelöscht` |
+| 7g | Drop im Ansichtsmodus | Ansichtsmodus offen, Finder-Bild bzw. ⌘⇧4-Thumbnail aufs Board ziehen und loslassen | `[HANDOFF] neue Drag-Session seq=… (Ansichtsmodus)`, `[VIEW] fremder Drag draggingEntered win=board … bild=true → Drop an Cursor`, `[DROP] performDragOperation win=board art=Drop im Ansichtsmodus dropPos=…`, `[MOTION] StopMotion drop … frames=2 … jitter=true`, `[VIEW] Drop im Ansichtsmodus bilder=1 cursor=(…) → Board bleibt offen`; **kein** `Board geschlossen` | Bild an der Cursorposition, 2 Drop-Frames, Board bleibt offen; danach Esc schließt wie 7c |
+| 7h | Reduce Motion | mit `--reduce-motion` 7, 7e, 7f, 7c | `reveal frames=1 duration=0.000s animated=false`, `move frames=1 … animated=false`, `delete frames=1 … animated=false`, `reveal rückwärts frames=1 … animated=false`, `schließen=0.…ms` | alles sofort, kein Zittern |
+| 7i | grow | Start mit `--handoff grow`, 7–7g | `mode=grow`, `[VIEW] Taste Esc fenster=ear(grown)`, Klick auf die Eselsohr-Ecke schließt | wie two-panels; danach Eselsohr wieder 40×40 an seinem Platz |
 
 Jederzeit ein Befund: `[FOCUS] App aktiviert: … !!! DROPBOARD SELBST AKTIVIERT`.
 
@@ -133,3 +164,43 @@ Jederzeit ein Befund: `[FOCUS] App aktiviert: … !!! DROPBOARD SELBST AKTIVIERT
 - Mehrere Monitore: Eselsohr und Board auf dem Bildschirm unter der Maus beim Start; Wechsel der Bildschirm-
   parameter wird nachgezogen, ein Eselsohr pro Bildschirm gibt es noch nicht.
 - Board deckt den ganzen Bildschirm inkl. Menüleiste ab (wie Spike); die Ablagefläche ist der `visibleFrame` minus 48 pt.
+- Ansichtsmodus, Fokus nach dem Schließen (⚠️ VERIFIZIEREN, Test 7c/7d): Ein Klick aufs Eselsohr macht es key (wie
+  schon in Schritt 1–6). Bleibt danach ein Dropboard-Panel key (`WARNUNG nach Ansichtsmodus: Eselsohr ist key`), landen
+  Tasten nicht in der Ursprungs-App. Gegenmaßnahme dann: `DropboardPanel.canBecomeKey` fürs Eselsohr `false` (Klicks
+  kommen trotzdem an, `acceptsFirstMouse`), Tasten im Ansichtsmodus nur noch über das per `makeKey()` key gemachte Board.
+- Ansichtsmodus: Umsortieren prüft keine Überlappung (bewusst: Moodboard, frei positionierbar; nur Grid-Snap und
+  Ablagefläche). Bilder, die noch als Platzhalter auf ein Promise warten, sind nicht wählbar.
+- Ansichtsmodus bei Bildschirmwechsel: wird ohne Animation beendet (`[VIEW] Ansichtsmodus sofort geschlossen`).
+
+## App bauen und verteilen
+
+Aus dem SwiftPM-Executable wird eine doppelklickbare `Dropboard.app` (plus `.zip` und `.dmg`). Nur auf dem Mac,
+nur Command Line Tools (kein Xcode). Signatur **nur ad-hoc**, keine Notarisierung (es gibt keine Signier-Identität).
+
+```sh
+app/scripts/build-app.sh                  # baut nach app/dist/: Dropboard.app, Dropboard-<version>.zip/.dmg, Dropboard-README.md
+app/scripts/build-app.sh --publish        # zusätzlich in die Dropbox (synct auf den Laptop), Muster wie nineTracker
+app/scripts/build-app.sh --install        # zusätzlich nach /Applications (laufende Instanz wird per pkill beendet)
+app/scripts/build-app.sh --version 0.2 --arm64-only --no-hardened-runtime   # Version fest, kein x86_64-Versuch, ohne Hardened Runtime
+```
+
+- **Version:** `--version X.Y[.Z]`, sonst aus `git describe --tags` (Tags `vX.Y`), sonst `0.1.<Commit-Zahl>`.
+  Build-Nummer = `git rev-list --count HEAD`.
+- **Architekturen:** arm64 immer; x86_64 wird per `swift build --triple x86_64-apple-macosx14.0` (eigener
+  `--scratch-path` unter `.build/`) versucht und per `lipo` zu universal zusammengefügt. Schlägt das fehl: Warnung,
+  weiter nur arm64. ⚠️ VERIFIZIEREN: Cross-Build mit reinen CLT ist ungetestet.
+- **Bundle:** `Contents/MacOS/Dropboard`, `Contents/Info.plist` (Vorlage `app/Packaging/Info.plist`, `LSUIElement`,
+  ab macOS 14), `Contents/Resources/AppIcon.icns` (per `sips`/`iconutil` aus `app/Packaging/AppIcon-1024.png`),
+  `Contents/Resources/noise.png`.
+- **Ressourcen:** `Bundle.module` wird nicht mehr benutzt (der SwiftPM-Accessor ruft in einer `.app` auf einem
+  anderen Mac `fatalError`). `ResourceLocator.swift` sucht `noise.png` in `Contents/Resources`, im SwiftPM-Bundle
+  in `Contents/Resources` und neben dem Executable (`swift build`/`swift run`); fehlt sie, gibt es Papier ohne
+  Noise und eine Logzeile, keinen Absturz.
+- **Signatur:** `codesign --force --sign - --timestamp=none --options runtime` (bei Fehler ohne Runtime), danach
+  `codesign --verify --strict`. `spctl` meldet bei Ad-hoc „rejected“ – erwartet, nur informativ.
+- **Dropbox (`--publish`):** `~/Library/CloudStorage/Dropbox/_PROJECTS/CLAUDE CODE/Dropboard/` mit
+  `versions/v<version>/Dropboard-v<version>.app`, `Dropboard-latest.zip`, `Dropboard-latest.dmg`, `Dropboard-README.md`.
+  Fehlt der Ordner `CLAUDE CODE`, bricht das Skript vor dem Build ab.
+- **Erster Start auf einem anderen Mac:** siehe `app/Packaging/Zuerst-lesen.md` (liegt im DMG als „Zuerst lesen.txt“):
+  Systemeinstellungen → Datenschutz & Sicherheit → „Trotzdem öffnen“, oder `xattr -dr com.apple.quarantine`.
+- **Icon ändern:** `python3 app/Packaging/make_icon.py` (numpy, Pillow) schreibt `app/Packaging/AppIcon-1024.png` neu.
