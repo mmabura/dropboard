@@ -36,17 +36,17 @@ Logdatei: `~/Library/Logs/Dropboard/dropboard.log`
 
 ## Stand
 
-- **Veröffentlicht:** 0.1.24 (Commit `ebf8359`), Briefing-Schritte 1–8 plus Review-Fixes. Baut ohne Fehler und Warnungen, Selftest 323/323, Idle 0,0 % CPU, Single-Instance-Schutz.
+- **Veröffentlicht:** 0.1.32 (Commit `4c9eef5`): Briefing-Schritte 1–8, Review-Fixes, Beschnitt (E11) und Export mit DPI (E12). Baut ohne Fehler und Warnungen, Selftest 505/505, Idle 0,0 % CPU, Single-Instance-Schutz.
 - **Nicht von Hand getestet:** die echten Drag-Gesten. Siehe `docs/stand.md`, Abschnitt „Noch NICHT nachgewiesen“. Wichtigster Test: Bild aufs Eselsohr ziehen, halten, das Board klappt auf, auf dem Board loslassen.
 
-## In Arbeit beim Packen dieses Archivs
+## Seit dem ersten Archiv (7. Okt., Commit a2848de) dazugekommen
 
-1. **Beschnitt per Doppelklick (E11).** Inzwischen fertig, ab Commit `903a3a0` (Version 0.1.30). Ein älteres Archiv enthält ihn nicht, `git pull` holt ihn. Die Spezifikation steht vollständig in `docs/entscheidungen.md` E11. Fehlt sie beim Weiterarbeiten auf dem Branch, neu umsetzen:
+1. **Beschnitt per Doppelklick (E11).** Inzwischen fertig, ab Commit `903a3a0` (Version 0.1.30). Ein älteres Archiv enthält ihn nicht, `git pull` holt ihn. Spezifikation in `docs/entscheidungen.md` E11:
    - Modell `BoardItem.crop`, normiert und abwärtskompatibel.
    - Darstellung über `contentsRect`.
    - Beschnittmodus im Ansichtsmodus per Doppelklick, mit Griffen, Pan, ⇧, Return/Esc/R.
    - Selftests.
-2. **Export mit DPI (E12).** Inzwischen fertig, ab Commit `4c9eef5` (Version 0.1.32). Ursprünglich geplant war: Die Spezifikation steht in E12:
+2. **Export mit DPI (E12).** Inzwischen fertig, ab Commit `4c9eef5` (Version 0.1.32). Spezifikation in E12:
    - Menüleiste bzw. ⌘E, kein Dialog.
    - PNG/PDF/Originale-Ordner, 72/150/300/600 dpi.
    - Aus Originalen dekodieren, maximal 16 384 px.
