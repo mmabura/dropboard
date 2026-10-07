@@ -11,9 +11,11 @@ enum CropStyle {
     /// `--snapshot-demo` (das beschnittene Demo-Bild zeigt den oberen linken Teil, siehe README „Beschnitt“).
     static let contentsRectOriginTop = false
 
-    /// Abdunklung des Bildes außerhalb des Rahmens: Graphit (PaperStyle.graphiteHex) wie abgedunkeltes Papier, kräftiger
-    /// als die Papier-Abdunklung beim Drag (0,35), damit der Rahmen auf jedem Bild klar lesbar ist.
-    static let outsideOpacity: Float = 0.55
+    /// Abdunklung des Bildes außerhalb des Rahmens: warmes Umbra (v1: PaperStyle.graphiteHex 0x3A2E22 bei 0,55 – wirkte
+    /// über blauen/lila Bildteilen kühl-schiefergrau). Jetzt brauner und etwas schwächer, passend zum abgedunkelten Papier.
+    /// Über Stahlblau 0x7C8DA8 ergibt das ≈ #766B69 (R > B, warm) statt v1 ≈ #585A5E (B > R, kühl).
+    static let outsideHex: UInt32 = 0x704A2A
+    static let outsideOpacity: Float = 0.5
     /// Rahmen: 1 pt Graphit.
     static let frameWidth: CGFloat = 1
     static let frameAlpha: CGFloat = 1
@@ -55,7 +57,7 @@ final class CropOverlay {
         container.contentsScale = scale
         withoutImplicitAnimations {
             for d in dims {
-                d.backgroundColor = PaperStyle.cgColor(PaperStyle.graphiteHex)
+                d.backgroundColor = PaperStyle.cgColor(CropStyle.outsideHex)
                 d.opacity = CropStyle.outsideOpacity
                 container.addSublayer(d)
             }

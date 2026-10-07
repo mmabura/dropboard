@@ -221,7 +221,11 @@ public enum CropMath {
             if handle.movesRight { r = limit(r + dx, l + m.width, 1) }
             if handle.movesTop { t = limit(t + dy, 0, b - m.height) }
             if handle.movesBottom { b = limit(b + dy, t + m.height, 1) }
-            return BoardCrop(x: l, y: t, width: r - l, height: b - t)
+            // Achse ohne bewegte Kante exakt übernehmen (nicht aus r − l neu rechnen: 0.2 + 0.4 − 0.2 ≠ 0.4 in Double).
+            let movesX = handle.movesLeft || handle.movesRight
+            let movesY = handle.movesTop || handle.movesBottom
+            return BoardCrop(x: movesX ? l : s.x, y: movesY ? t : s.y,
+                             width: movesX ? r - l : s.width, height: movesY ? b - t : s.height)
         }
 
         let w0 = s.width, h0 = s.height

@@ -102,6 +102,12 @@ enum CropSelfTest {
         check("untere Kante −30 pt → Höhe 0.7", near(drag(.bottom, .full, 0, -30), BoardCrop(x: 0, y: 0, width: 1, height: 0.7)))
         check("obere Kante ändert x/Breite nicht", { let c = drag(.top, mid, 40, 10); return c.x == mid.x && c.width == mid.width }())
         check("Kante ignoriert die Querrichtung (rechts, dy)", near(drag(.right, mid, 0, 30), mid))
+        check("ohne ⇧: alle 4 Kanten lassen die Querachse bitgenau unverändert", { () -> Bool in
+            let l = drag(.left, mid, -15, 30), r = drag(.right, mid, 15, 30)
+            let tp = drag(.top, mid, 40, -10), b = drag(.bottom, mid, 40, 10)
+            return l.y == mid.y && l.height == mid.height && r.y == mid.y && r.height == mid.height
+                && tp.x == mid.x && tp.width == mid.width && b.x == mid.x && b.width == mid.width
+        }())
 
         check("⇧ Ecke unten rechts: Faktor 1.5, Verhältnis bleibt",
               near(drag(.bottomRight, mid, 40, 0, shift: true), BoardCrop(x: 0.2, y: 0.2, width: 0.6, height: 0.6)))
@@ -503,7 +509,13 @@ enum CropSelfTest {
                 && overlay.flatMap { $0.handleCenter(.bottomRight) }.map { near($0, CGPoint(x: 120, y: 40)) } == true)
         let dimArea = overlay?.dimFrames.reduce(CGFloat(0)) { $0 + $1.width * $1.height } ?? -1
         check("Overlay: Abdunklung deckt genau das Bild außerhalb des Rahmens (20000 − 3200 pt²)", near(dimArea, 16800, 1e-6))
-        check("Overlay: warmes Graphit, keine Systemfarbe", CropStyle.outsideOpacity > 0 && PaperStyle.graphiteHex == 0x3A2E22)
+        // Schleier über Stahlblau (Demo-Farbe 0x7C8DA8) muss warm bleiben (Rot ≥ Blau), nicht schiefergrau.
+        let a = Double(CropStyle.outsideOpacity)
+        func ch(_ hex: UInt32, _ shift: UInt32) -> Double { Double((hex >> shift) & 0xFF) }
+        let veilR = ch(0x7C8DA8, 16) * (1 - a) + ch(CropStyle.outsideHex, 16) * a
+        let veilB = ch(0x7C8DA8, 0) * (1 - a) + ch(CropStyle.outsideHex, 0) * a
+        check("Overlay: warmer Umbra-Schleier, über Blau Rot ≥ Blau (keine Systemfarbe)",
+              CropStyle.outsideOpacity > 0 && ch(CropStyle.outsideHex, 16) > ch(CropStyle.outsideHex, 0) && veilR >= veilB)
 
         scene.setImage(image, size: CGSize(width: 10, height: 10), crop: nil, for: id)
         check("Neu-Dekodieren während des Beschnitts ändert die Geometrie nicht", layer.bounds.size == CGSize(width: 200, height: 100))
