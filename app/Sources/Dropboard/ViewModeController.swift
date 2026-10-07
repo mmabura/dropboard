@@ -35,6 +35,11 @@ final class ViewModeController {
     weak var coordinator: DragCoordinator?
     private var rng: SplitMix64
     private var keyMonitor: Any?
+    /// C16: Rückfallweg für Esc, solange kein Dropboard-Panel key ist (z. B. Menü „Board öffnen“, makeKey wirkungslos).
+    private var escTimer: Timer?
+    private var escWasDown = false
+    /// C3: Ursprungs-App beim Öffnen – nur fürs Log, sie wird NICHT aktiviert.
+    private var frontAtOpen: String = "nil"
     private(set) var selectedID: UUID?
     private var press: Press?
     private var openedAt: TimeInterval = 0
@@ -58,14 +63,24 @@ final class ViewModeController {
         openedAt = Log.now
         press = nil
         selectedID = nil
+        frontAtOpen = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
         let plan = presenter.openForViewing(options: motionOptions, using: &rng)
         installKeyMonitor()
+        startEscFallback()
         Log.line("[VIEW]", "Ansichtsmodus geöffnet grund=\(reason) mode=\(presenter.handoff.rawValue) "
             + "items=\(board.document.items.count) StopMotion reveal frames=\(plan.frames.count) "
             + "duration=\(String(format: "%.3f", plan.duration))s animated=\(plan.isAnimated) jitter=\(motionOptions.jitter) "
             + "reduceMotion=\(motion.effective) abgedunkelt=\(board.scene.isDimmed)")
         diagnostics.logWindows("Ansichtsmodus offen")
         diagnostics.logFocus("Ansichtsmodus offen")
+        if !dropboardPanelIsKey {
+            Log.line("[FOCUS]", "WARNUNG Ansichtsmodus offen, aber kein Dropboard-Panel key (makeKey wirkungslos?) → "
+                + "Esc über Tastenzustand-Rückfallweg, Klick aufs Board macht es key")
+        }
+    }
+
+    private var dropboardPanelIsKey: Bool {
+        presenter.ear.isKeyWindow || presenter.board?.isKeyWindow == true
     }
 
     /// Stop-Motion-Zuklappen (reveal rückwärts, 3 Frames), dann orderOut; `completion` danach.
@@ -73,6 +88,7 @@ final class ViewModeController {
         finishPress()
         select(nil, log: false)
         removeKeyMonitor()
+        stopEscFallback()
         let frames = motion.effective ? 1 : ViewModeSequences.frameCount
         Log.line("[VIEW]", "Ansichtsmodus schließen grund=\(reason) StopMotion reveal rückwärts frames=\(frames) "
             + "duration=\(String(format: "%.3f", motion.effective ? 0 : Double(frames) * StopMotionClock.frameDuration))s "
@@ -92,19 +108,63 @@ final class ViewModeController {
         finishPress()
         select(nil, log: false)
         removeKeyMonitor()
+        stopEscFallback()
         presenter.closeImmediately()
         Log.line("[VIEW]", "Ansichtsmodus sofort geschlossen grund=\(reason)")
         logFocusAfterClose()
     }
 
+    /// C3: Nach dem Schließen darf kein Dropboard-Panel key sein (BoardPresenter.closeImmediately nimmt die
+    /// Key-Fähigkeit zurück). Die Ursprungs-App wird NICHT aktiviert, Dropboard nicht deaktiviert/versteckt:
+    /// NSApp.hide würde auch das Eselsohr verstecken, NSApp.deactivate ist für eine nie aktive App nicht belegt.
+    /// ⚠️ VERIFIZIEREN: Ohne Key-Window bei Dropboard gehen Tasten wieder an die Ursprungs-App (Hardware: nach Esc
+    /// in TextEdit weitertippen). Bleibt Dropboard aktiv (NSApp.isActive=true), nur WARNUNG loggen.
     private func logFocusAfterClose() {
         diagnostics.logWindows("nach Ansichtsmodus")
         diagnostics.logFocus("nach Ansichtsmodus")
-        // ⚠️ VERIFIZIEREN: Bleibt ein Dropboard-Panel nach dem Schließen key, landen Tasten weiter bei Dropboard
-        // statt bei der Ursprungs-App. Das wäre ein Befund (Gegenmaßnahme siehe README, Ansichtsmodus).
-        if presenter.ear.isKeyWindow {
-            Log.line("[FOCUS]", "WARNUNG nach Ansichtsmodus: Eselsohr ist key → Tastatur bleibt bei Dropboard")
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
+        Log.line("[FOCUS]", "nach Ansichtsmodus frontmost vorher=\(frontAtOpen) jetzt=\(front) NSApp.isActive=\(NSApp.isActive) "
+            + "keyWindow=\(windowName(NSApp.keyWindow)) dropboardKey=\(dropboardPanelIsKey)")
+        if dropboardPanelIsKey {
+            Log.line("[FOCUS]", "WARNUNG nach Ansichtsmodus: Dropboard-Panel ist key → Tastatur bleibt bei Dropboard")
         }
+        if NSApp.isActive {
+            Log.line("[FOCUS]", "WARNUNG nach Ansichtsmodus: Dropboard ist aktiv (nicht vorgesehen) – kein Gegenmittel ohne Beleg")
+        }
+    }
+
+    // MARK: Esc-Rückfallweg (C16)
+
+    /// Läuft nur, solange der Ansichtsmodus offen ist. Fragt Esc nur ab, wenn KEIN Dropboard-Panel key ist –
+    /// sonst ist der lokale Key-Monitor zuständig. Flankengesteuert (gedrückt halten schließt nicht doppelt).
+    private func startEscFallback() {
+        stopEscFallback()
+        escWasDown = EscapeKey.isDown()
+        // ⚠️ VERIFIZIEREN: MainActor.assumeIsolated im Timer-Block (Timer auf RunLoop.main → Main Thread).
+        let timer = Timer(timeInterval: DropboardConfig.viewEscPollInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.escPollTick()
+                return
+            }
+        }
+        timer.tolerance = DropboardConfig.viewEscPollInterval / 2
+        RunLoop.main.add(timer, forMode: .common)
+        escTimer = timer
+    }
+
+    private func stopEscFallback() {
+        escTimer?.invalidate()
+        escTimer = nil
+    }
+
+    private func escPollTick() {
+        guard coordinator?.phase == .viewing else { stopEscFallback(); return }
+        guard !dropboardPanelIsKey else { escWasDown = false; return }
+        let down = EscapeKey.isDown()
+        defer { escWasDown = down }
+        guard down && !escWasDown else { return }
+        Log.line("[VIEW]", "Esc erkannt (Tastenzustand-Rückfallweg, kein Dropboard-Panel key) NSApp.isActive=\(NSApp.isActive)")
+        coordinator?.closeViewing(reason: "Esc (Tastenzustand)")
     }
 
     // MARK: Maus (Board-Koordinaten)

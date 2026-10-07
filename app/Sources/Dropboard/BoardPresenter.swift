@@ -33,6 +33,8 @@ final class BoardPresenter {
     private(set) var corner: EarCorner
     /// Eselsohr per Hotkey/Menü ausgeblendet (nicht gespeichert)
     private(set) var earHidden = false
+    /// C2: kein Bildschirm angeschlossen (didChangeScreenParameters) → Eselsohr ausgeblendet, kein Öffnen möglich.
+    private(set) var screenAvailable = true
     private var closeToken = 0
 
     init(handoff: HandoffMode, screen: NSScreen, corner: EarCorner, scene: BoardScene, noiseTile: CGImage?) {
@@ -81,6 +83,7 @@ final class BoardPresenter {
     }
 
     func showEar() {
+        guard !earHidden, screenAvailable else { return }
         ear.orderFrontRegardless()
     }
 
@@ -91,8 +94,16 @@ final class BoardPresenter {
         if hidden {
             ear.orderOut(nil)
         } else {
-            ear.orderFrontRegardless()
+            showEar()
         }
+    }
+
+    /// C2: letzter Bildschirm weg (z. B. Monitor aus/abgezogen). Board zu, Eselsohr weg, bis `relayout` mit einem
+    /// Bildschirm kommt. Der Aufrufer beendet vorher alle Phasen (DragCoordinator.endAllImmediately).
+    func screenLost() {
+        if isOpen { closeImmediately() }
+        screenAvailable = false
+        ear.orderOut(nil)
     }
 
     // MARK: Koordinaten
@@ -153,8 +164,11 @@ final class BoardPresenter {
     }
 
     /// Sofort ausblenden (nach den Drop-Frames, E8). Erst orderOut, dann Maske weg – sonst blitzt das Board auf.
+    /// C3: Vorher die Key-Fähigkeit beider Panels zurücknehmen, danach darf kein Dropboard-Panel key sein.
     func closeImmediately() {
         closeToken += 1
+        ear.allowsKey = false
+        board?.allowsKey = false
         switch handoff {
         case .twoPanels:
             board?.orderOut(nil)
@@ -176,6 +190,22 @@ final class BoardPresenter {
         isViewing = false
         // Ansichtsmodus aus dem Menü bei ausgeblendetem Eselsohr: das Eselsohr lag als Ecke über dem Board → wieder weg.
         if earHidden { ear.orderOut(nil) }
+        releaseEarKeyStatus()
+    }
+
+    /// C3: Ist das (sichtbare) Eselsohr noch key (grow: es war das Board; two-panels: sollte nicht vorkommen),
+    /// verliert es den Key-Status per orderOut und kommt sofort per orderFrontRegardless zurück (macht nicht key).
+    /// Kein NSApp.activate, kein Aktivieren der Ursprungs-App. `resignKey()` wird nicht direkt aufgerufen
+    /// (laut Apple-Doku nur eine Benachrichtigung, ändert den Key-Status nicht).
+    /// ⚠️ VERIFIZIEREN: orderOut nimmt dem Key-Window den Key-Status; weil kein anderes Dropboard-Panel key werden
+    /// darf, gehen die Tasten danach wieder an die Ursprungs-App, ohne sichtbares Flackern des Eselsohrs.
+    /// Nachweis: Log `[FOCUS] Eselsohr war key → Key-Status abgegeben` gefolgt von `earKey=false`.
+    private func releaseEarKeyStatus() {
+        guard ear.isKeyWindow else { return }
+        ear.orderOut(nil)
+        if !earHidden && screenAvailable { ear.orderFrontRegardless() }
+        Log.line("[FOCUS]", "Eselsohr war key → Key-Status abgegeben (orderOut + orderFrontRegardless) "
+            + "earKey=\(ear.isKeyWindow) keyWindow=\(NSApp.keyWindow == nil ? "nil" : "dropboard")")
     }
 
     // MARK: Ansichtsmodus (Schritt 7, Stop-Motion-Pfad)
@@ -204,9 +234,12 @@ final class BoardPresenter {
             StopMotionSheet.play(plan, on: scene.sheet, anchor: anchor, removeMaskAfter: true)
             board?.orderFrontRegardless()
             ear.orderFrontRegardless()   // gleiches Level, zuletzt nach vorn → Eselsohr liegt über dem Board
+            // C3: nur das Board darf im Ansichtsmodus key werden, das Eselsohr nie (sonst bleibt es nach dem Schließen key).
             // ⚠️ VERIFIZIEREN: makeKey() auf einem nicht aktivierenden Panel einer inaktiven App macht es key
             // (Tastatur) ohne die App zu aktivieren. Belegt ist nur: Klick macht das Panel key (Spike eselsohr-drop).
-            // Fällt es aus, bleibt das Eselsohr nach dem Klick key – der lokale Key-Monitor greift dann trotzdem.
+            // Fällt es aus (Log `[FOCUS] Ansichtsmodus offen … boardKey=false`), macht ein Klick aufs Board es key;
+            // zusätzlich prüft ViewModeController Esc per Tastenzustand (C16).
+            board?.allowsKey = true
             board?.makeKey()
         case .grow:
             withoutImplicitAnimations {
@@ -220,6 +253,7 @@ final class BoardPresenter {
             ear.setFrame(boardFrame, display: true)
             withoutImplicitAnimations { growRoot.frame = CGRect(origin: .zero, size: boardFrame.size) }
             if earHidden { ear.orderFrontRegardless() }   // grow: das Eselsohr-Panel ist das Board
+            ear.allowsKey = true   // grow: das Eselsohr-Panel ist das Board → nur hier und nur im Ansichtsmodus
             ear.makeKey()   // ⚠️ VERIFIZIEREN: wie oben (grow: das Eselsohr-Panel ist das Board)
         }
         return plan
@@ -260,13 +294,16 @@ final class BoardPresenter {
     // MARK: Bildschirmwechsel
 
     /// Neue Ecke (Menüleiste): Eselsohr sofort versetzen und neu zeichnen (Falz zeigt zur Bildschirmmitte).
-    func setCorner(_ newCorner: EarCorner, screen: NSScreen) {
+    /// Ohne Bildschirm (C2) nur merken; das nächste `relayout` setzt sie um.
+    func setCorner(_ newCorner: EarCorner, screen: NSScreen?) {
         corner = newCorner
-        relayout(screen: screen)
+        if let screen = screen { relayout(screen: screen) }
     }
 
     func relayout(screen: NSScreen) {
         if isOpen { closeImmediately() }
+        let wasMissing = !screenAvailable
+        screenAvailable = true
         earFrame = ScreenGeometry.earFrame(screen, corner: corner)
         boardFrame = ScreenGeometry.boardFrame(screen)
         usableArea = ScreenGeometry.usableArea(screen, metrics: LayoutMetrics.standard)
@@ -274,6 +311,7 @@ final class BoardPresenter {
         ear.setFrame(earFrame, display: true)
         board?.setFrame(boardFrame, display: false)
         updateEarArt(scale: screen.backingScaleFactor)
+        if wasMissing { showEar() }   // C2: Bildschirm wieder da
     }
 
     private func updateEarArt(scale: CGFloat) {

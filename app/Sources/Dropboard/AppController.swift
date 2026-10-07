@@ -35,13 +35,55 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // S1: vor allem anderen (kein Fenster, kein Hotkey, kein Board-Zugriff), damit sich zwei Instanzen nicht
+        // gegenseitig stören.
+        exitIfAnotherInstanceRuns()
         do {
             try store.prepareDirectories()
         } catch {
             Log.line("[STORE]", "FEHLER Ordner anlegen \(store.boardDirectory.path): \(error.localizedDescription)")
         }
+        // Bildschirm-Beobachter zuerst: ohne Bildschirm startet das Eselsohr bei der nächsten Notification (C2).
+        NotificationCenter.default.addObserver(self, selector: #selector(screenParametersChanged(_:)),
+                                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        startIfScreenAvailable()
+    }
 
-        let screen = ScreenGeometry.screenUnderMouse()
+    func applicationWillTerminate(_ notification: Notification) {
+        Log.flush()   // P7: asynchrones Log vollständig schreiben
+    }
+
+    /// S1: Single-Instance-Schutz. Läuft schon eine ältere Dropboard-Instanz (gleiche Bundle-ID, andere PID),
+    /// beendet sich diese sofort – OHNE die andere zu aktivieren (kein Fokusraub). Ohne Bundle-ID (swift run) kein Check.
+    private func exitIfAnotherInstanceRuns() {
+        let bundleID = Bundle.main.bundleIdentifier
+        let me = NSRunningApplication.current
+        let running = bundleID.map { NSRunningApplication.runningApplications(withBundleIdentifier: $0) } ?? []
+        let infos = running.filter { !$0.isTerminated }.map { InstanceInfo(pid: $0.processIdentifier, launchDate: $0.launchDate) }
+        guard let other = SingleInstance.instanceToYieldTo(ownPID: me.processIdentifier, ownLaunch: me.launchDate,
+                                                           bundleID: bundleID, running: infos) else {
+            if bundleID == nil {
+                Log.line("[WIN]", "Instanz-Check übersprungen (keine Bundle-ID, swift run)")
+            } else if infos.count > 1 {
+                Log.line("[WIN]", "Weitere Instanz(en) gefunden, diese ist die älteste → läuft weiter "
+                    + "pids=\(infos.map { $0.pid })")
+            }
+            return
+        }
+        Log.line("[WIN]", "Bereits eine Instanz aktiv (pid \(other.pid)) – beende mich (pid \(me.processIdentifier), "
+            + "pfad=\(Bundle.main.bundleURL.path))")
+        Log.flush()
+        exit(0)
+    }
+
+    /// Eselsohr, Board und Menüleiste aufbauen, sobald ein Bildschirm da ist (C2: Mac mini ohne Monitor beim Login).
+    /// Standard-Bildschirm ist der Hauptbildschirm mit Menüleiste (C18/B12), nicht der unter der Maus.
+    private func startIfScreenAvailable() {
+        guard presenter == nil else { return }
+        guard let screen = ScreenGeometry.primaryScreen() else {
+            Log.line("[WIN]", "Kein Bildschirm beim Start → warte auf didChangeScreenParameters (Eselsohr erst dann)")
+            return
+        }
         let scale = screen.backingScaleFactor
         let noise = PaperArt.loadNoiseTile()
         let scene = BoardScene(size: screen.frame.size, scale: scale, noiseTile: noise)
@@ -74,8 +116,6 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
                        name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
         ws.addObserver(self, selector: #selector(appActivated(_:)),
                        name: NSWorkspace.didActivateApplicationNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(screenParametersChanged(_:)),
-                                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
 
     private func logStart(_ screen: NSScreen) {
@@ -84,7 +124,7 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
             + "macOS=\(pi.operatingSystemVersionString) pid=\(pi.processIdentifier) "
             + "activationPolicy=\(NSApp.activationPolicy().rawValue) log=\(Log.filePath)")
         diagnostics?.logLevels()
-        Log.line("[WIN]", "Bildschirme=\(NSScreen.screens.count) frame=\(fmt(screen.frame)) visibleFrame=\(fmt(screen.visibleFrame)) "
+        Log.line("[WIN]", "Bildschirme=\(NSScreen.screens.count) Eselsohr auf Hauptbildschirm (screens[0], Menüleiste) frame=\(fmt(screen.frame)) visibleFrame=\(fmt(screen.visibleFrame)) "
             + "backingScale=\(screen.backingScaleFactor) safeAreaTop=\(screen.safeAreaInsets.top)")
         Log.line("[MOTION]", "Bewegung reduzieren: system=\(motion.system) forced=\(motion.forced) effective=\(motion.effective) "
             + "expandDelay=\(settings.expandDelayMs)ms dropCloseDelay=\(Int((DropboardConfig.dropCloseDelay * 1000).rounded()))ms")
@@ -105,11 +145,22 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
             + (own ? " !!! DROPBOARD SELBST AKTIVIERT" : ""))
     }
 
-    /// Auflösung/Monitore geändert: Eselsohr neu positionieren, Board-Größe und Ablagefläche nachziehen.
+    /// Auflösung/Monitore geändert: ALLE Phasen sauber beenden (C4), Eselsohr auf dem Hauptbildschirm neu
+    /// positionieren, Board-Größe und Ablagefläche nachziehen. Ohne Bildschirm: Eselsohr weg, auf den nächsten warten (C2).
+    /// ⚠️ VERIFIZIEREN: didChangeScreenParameters kommt auch beim Wechsel von 0 auf 1 Bildschirm (Monitor wieder an).
     @objc private func screenParametersChanged(_ note: Notification) {
-        guard let presenter = presenter else { return }
-        let screen = presenter.ear.screen ?? ScreenGeometry.screenUnderMouse()
-        coordinator?.endViewingImmediately(reason: "Bildschirmparameter geändert")
+        guard let presenter = presenter else {
+            Log.line("[WIN]", "Bildschirmparameter geändert Bildschirme=\(NSScreen.screens.count) (noch nicht gestartet)")
+            startIfScreenAvailable()
+            return
+        }
+        coordinator?.endAllImmediately(reason: "Bildschirmparameter geändert")
+        guard let screen = ScreenGeometry.primaryScreen() else {
+            presenter.screenLost()
+            Log.line("[WIN]", "Bildschirmparameter geändert Bildschirme=0 → Eselsohr ausgeblendet, warte auf Bildschirm")
+            statusMenu?.refresh()
+            return
+        }
         presenter.relayout(screen: screen)
         boardController?.usableArea = presenter.usableArea
         importer?.scale = screen.backingScaleFactor
@@ -172,11 +223,11 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
         let old = settings.corner
         settings.corner = corner
         coordinator?.endAllImmediately(reason: "Ecke geändert")
-        let screen = presenter.ear.screen ?? ScreenGeometry.screenUnderMouse()
+        let screen = ScreenGeometry.primaryScreen()
         presenter.setCorner(corner, screen: screen)
         boardController?.usableArea = presenter.usableArea
         Log.line("[SETTINGS]", "Ecke \(old.rawValue) → \(corner.rawValue) ear=\(fmt(presenter.earFrame)) "
-            + "visibleFrame=\(fmt(screen.visibleFrame)) versteckt=\(presenter.earHidden) gespeichert=\(settings.corner == corner)")
+            + "visibleFrame=\(screen.map { fmt($0.visibleFrame) } ?? "kein Bildschirm") versteckt=\(presenter.earHidden) gespeichert=\(settings.corner == corner)")
         diagnostics?.logWindows("Ecke geändert")
     }
 
@@ -198,6 +249,7 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
 
     func quitFromMenu() {
         Log.line("[SETTINGS]", "Dropboard beenden (Menüleiste)")
+        Log.flush()
         hideHotKey?.unregister()
         NSApp.terminate(nil)
     }

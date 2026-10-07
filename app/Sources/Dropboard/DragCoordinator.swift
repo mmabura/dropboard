@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import DropboardCore
 
 /// Zustandsautomat für Drag-Sessions auf Eselsohr und Board (Logik aus Spike eselsohr-drop/AppController).
@@ -11,11 +12,15 @@ import DropboardCore
 /// Ansichtsmodus (Schritt 7, Details in ViewModeController):
 ///   idle ──Klick aufs Eselsohr / Menüleiste „Board öffnen“──▶ viewing ──Esc / Klick aufs Eselsohr──▶ viewClosing ──3 Frames Stop-Motion──▶ idle
 ///   In `viewing` landet ein fremder Drag (Bild) auf Eselsohr oder Board per Drop an Cursor; das Board bleibt offen.
+///
+/// Phase 4 (Gruppe B): Entscheidungen in `DragRules`/`WatchdogRules` (DropboardConfig.swift, Selftest FixB).
+///   C1  expanded: Eselsohr lehnt nicht mehr ab; ein Drop dort = Board-Drop an Cursor (Board liegt sichtbar darüber).
+///   C12 draggingUpdated prüft die Phase neu: nach collapsing/dropClosing → idle startet Hovering ohne Neueintritt.
+///   C4  endAllImmediately ist der gemeinsame Weg für Bildschirmwechsel, Ecke, Ausblenden.
+///   P8/P14 Watchdog und Aktivitäts-Assertion hängen am `phase`-didSet → Stopp in allen Endpfaden garantiert.
 @MainActor
 final class DragCoordinator: NSObject {
-    enum Phase: String {
-        case idle, hovering, expanded, collapsing, dropClosing, viewing, viewClosing
-    }
+    typealias Phase = DragPhase
 
     private let presenter: BoardPresenter
     private let board: BoardController
@@ -25,7 +30,18 @@ final class DragCoordinator: NSObject {
     /// Schritt 8: Verzögerung bis zum Expand kommt aus den Einstellungen (wirkt ab dem nächsten Drag).
     private let settings: Settings
     private let viewMode: ViewModeController
-    private(set) var phase: Phase = .idle
+    private(set) var phase: Phase = .idle {
+        didSet {
+            guard phase != oldValue else { return }
+            // P8: Watchdog läuft nur in `expanded` – jeder andere Zustand stoppt ihn, egal über welchen Pfad.
+            if phase != .expanded { stopPolling() }
+            // P14: Aktivitäts-Assertion für die ganze Drag-Session (inkl. Expand-Timer in `hovering`).
+            updateActivity()
+        }
+    }
+    /// P14: ProcessInfo-Aktivität (userInitiated + latencyCritical), solange `phase.isDragSession`.
+    private var activity: NSObjectProtocol?
+    private var activityStart: TimeInterval = 0
 
     // Drag-Session / Expand (wie Spike)
     private var sessionSeq = Int.min
@@ -37,6 +53,10 @@ final class DragCoordinator: NSObject {
     private var noEnterWarned = false
     private var releaseSeenAt: TimeInterval?
     private var exitedInsideAt: TimeInterval?
+    /// P8: Zeitpunkt von prepareForDragOperation (Drop angekündigt) für den Timeout ohne performDragOperation.
+    private var prepareAt: TimeInterval?
+    /// C12: „Bild im Drag?“ einmal pro Drag-Session (draggingUpdated fragt es sonst bei jedem Update ab).
+    private var imageCheck: (seq: Int, isImage: Bool)?
     private var updateLoggedAfterExpand = Set<String>()
     private var pollTimer: Timer?
     /// Ansichtsmodus: nimmt der aktuelle fremde Drag ein Bild mit? (in draggingEntered bestimmt)
@@ -90,6 +110,10 @@ final class DragCoordinator: NSObject {
     /// Rückgabe: geöffnet? (nur aus `idle`)
     @discardableResult
     func openViewing(reason: String) -> Bool {
+        guard presenter.screenAvailable else {
+            Log.line("[VIEW]", "Ansichtsmodus öffnen ignoriert grund=\(reason) – kein Bildschirm")
+            return false
+        }
         guard phase == .idle else {
             Log.line("[VIEW]", "Ansichtsmodus öffnen ignoriert grund=\(reason) phase=\(phase.rawValue)")
             return false
@@ -109,31 +133,33 @@ final class DragCoordinator: NSObject {
         }
     }
 
-    /// Bildschirmwechsel o. Ä.: Ansichtsmodus ohne Animation beenden (vor BoardPresenter.relayout aufrufen).
+    /// Ansichtsmodus ohne Animation beenden (Teil von endAllImmediately).
     func endViewingImmediately(reason: String) {
         guard phase == .viewing || phase == .viewClosing else { return }
         viewMode.endImmediately(reason: reason)
         phase = .idle
     }
 
-    /// Schritt 8 (Ecke wechseln, Eselsohr ausblenden): alles ohne Animation beenden – Ansichtsmodus wie oben, ein
-    /// laufender Drag-Zustand (hovering/expanded/collapsing/dropClosing) wird abgebrochen und das Board geschlossen.
-    /// Danach ist die Phase `idle`, damit kein Zuklappen-Completion mehr auf einen alten Rahmen wartet.
+    /// C4 – gemeinsamer Weg für Bildschirmwechsel, Ecke wechseln, Eselsohr ausblenden: ALLE Phasen ohne Animation
+    /// beenden. Ansichtsmodus wie oben, ein Drag-Zustand (hovering/expanded/collapsing/dropClosing) wird abgebrochen
+    /// und das Board geschlossen. Danach ist die Phase `idle` (Watchdog und Aktivität enden im didSet), und keine
+    /// Zuklappen-/Drop-Completion wartet mehr auf einen alten Rahmen (closeToken im Presenter, Guards hier).
     func endAllImmediately(reason: String) {
+        cancelExpand()
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(closeAfterDrop), object: nil)
         switch phase {
         case .idle:
+            stopPolling()
             return
         case .viewing, .viewClosing:
             endViewingImmediately(reason: reason)
         case .hovering, .expanded, .collapsing, .dropClosing:
             let was = phase
-            cancelExpand()
-            stopPolling()
-            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(closeAfterDrop), object: nil)
             presenter.closeImmediately()
             phase = .idle
             Log.line("[HANDOFF]", "abgebrochen grund=\(reason) phase=\(was.rawValue) → idle (ohne Animation)")
         }
+        stopPolling()
     }
 
     // MARK: Hilfen
@@ -144,6 +170,22 @@ final class DragCoordinator: NSObject {
     /// (liegt bei two-panels über dem Board) als Board.
     private func isBoardTarget(_ view: DropTargetView) -> Bool {
         view.role == .board || (handoff == .grow && presenter.isOpen) || phase == .viewing
+    }
+
+    /// P14: Aktivität an/aus je nach Phase (nur aus dem phase-didSet).
+    /// ⚠️ VERIFIZIEREN: beginActivity(options: [.userInitiated, .latencyCritical]) verhindert Timer-Coalescing/App Nap
+    /// für den Expand-Timer; Messung: Log `Expand ausgelöst … verspätung=…ms`.
+    private func updateActivity() {
+        if phase.isDragSession {
+            guard activity == nil else { return }
+            activityStart = Log.now
+            activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical],
+                                                             reason: "Dropboard: Drag über Eselsohr/Board")
+        } else if let a = activity {
+            ProcessInfo.processInfo.endActivity(a)
+            activity = nil
+            Log.line("[HANDOFF]", "Aktivität (userInitiated, latencyCritical) beendet nach \(Log.ms(since: activityStart))ms phase=\(phase.rawValue)")
+        }
     }
 
     private func name(of view: DropTargetView) -> String {
@@ -186,40 +228,100 @@ final class DragCoordinator: NSObject {
                 return []
             }
             boardReached = true
-            exitedInsideAt = nil
+            logReentry(win)
             Log.line("[HANDOFF]", "draggingEntered win=\(win)\(sinceExpand()) mausBewegtSeitExpand=\(mouseMovedSinceExpand()) "
                 + "pos=\(pos) maus=\(fmt(NSEvent.mouseLocation))")
             return .copy
         }
-        guard phase == .idle || phase == .hovering else {
-            Log.line("[HANDOFF]", "draggingEntered win=\(win) ignoriert phase=\(phase.rawValue)")
+        let isImage = noteSession(info, win: win, phaseLabel: "draggingEntered")
+        switch DragRules.earDrag(phase: phase, isImage: isImage) {
+        case .reject:
+            if isImage {
+                Log.line("[HANDOFF]", "draggingEntered win=\(win) ignoriert phase=\(phase.rawValue) "
+                    + "(Hover startet per draggingUpdated, sobald idle)")
+            } else {
+                Log.line("[PB]", "kein Bild im Drag → Eselsohr bleibt still (kein Expand, kein Drop)")
+            }
             return []
+        case .startHover:
+            startHover(win: win, pos: pos, via: "draggingEntered")
+            return .copy
+        case .keepHover:
+            return .copy
+        case .boardDrop:
+            // C1: Handoff hat (noch) nicht aufs Board-Panel gewechselt – annehmen, Drop gilt als Board-Drop an Cursor.
+            exitedInsideAt = nil
+            Log.line("[HANDOFF]", "draggingEntered win=\(win) phase=expanded\(sinceExpand()) → angenommen "
+                + "(Drop hier = Board-Drop an Cursor) pos=\(pos)")
+            return .copy
         }
-        let seq = info.draggingSequenceNumber
-        if seq != sessionSeq {
-            sessionSeq = seq
-            dropReceived = false
-            Log.line("[HANDOFF]", "neue Drag-Session seq=\(seq)")
-            importer.dumpPasteboard(info, phase: "draggingEntered", window: win)
-        }
-        guard importer.looksLikeImage(info) else {
-            Log.line("[PB]", "kein Bild im Drag → Eselsohr bleibt still (kein Expand, kein Drop)")
-            return []
-        }
-        phase = .hovering
-        Log.line("[HANDOFF]", "draggingEntered win=\(win) pos=\(pos) → Expand-Timer \(settings.expandDelayMs)ms")
-        scheduleExpand()
-        return .copy
     }
 
     func dragUpdated(_ view: DropTargetView, _ info: NSDraggingInfo) -> NSDragOperation {
         view.updateCount += 1
         if phase == .viewing { return viewDragAccepts ? .copy : [] }
-        guard isBoardTarget(view) else { return phase == .hovering ? .copy : [] }
+        guard isBoardTarget(view) else { return earUpdated(view, info) }
         guard phase == .expanded else { return [] }
         boardReached = true
-        exitedInsideAt = nil
         let win = name(of: view)
+        logReentry(win)
+        logUpdateThrottled(view, info, win: win)
+        return .copy
+    }
+
+    /// Eselsohr (kein Board-Ziel): Phase bei JEDEM Update neu prüfen (C12), im expanded annehmen (C1).
+    private func earUpdated(_ view: DropTargetView, _ info: NSDraggingInfo) -> NSDragOperation {
+        let win = name(of: view)
+        let isImage = noteSession(info, win: win, phaseLabel: "draggingUpdated")
+        switch DragRules.earDrag(phase: phase, isImage: isImage) {
+        case .reject:
+            return []
+        case .startHover:
+            // ⚠️ VERIFIZIEREN: AppKit schickt draggingUpdated weiter, auch wenn draggingEntered [] geliefert hat
+            // (Drag kam während collapsing/dropClosing). Nachweis: diese Logzeile.
+            startHover(win: win, pos: fmt(screenPoint(view, info)), via: "draggingUpdated (Phase wieder idle)")
+            return .copy
+        case .keepHover:
+            return .copy
+        case .boardDrop:
+            exitedInsideAt = nil
+            logUpdateThrottled(view, info, win: win + "(expanded, Handoff nicht übernommen)")
+            return .copy
+        }
+    }
+
+    /// Neue Drag-Session erkennen (seq), Pasteboard einmal dumpen, „Bild?“ einmal pro Session bestimmen.
+    private func noteSession(_ info: NSDraggingInfo, win: String, phaseLabel: String) -> Bool {
+        let seq = info.draggingSequenceNumber
+        if seq != sessionSeq {
+            sessionSeq = seq
+            dropReceived = false
+            prepareAt = nil
+            Log.line("[HANDOFF]", "neue Drag-Session seq=\(seq) phase=\(phase.rawValue)")
+            importer.dumpPasteboard(info, phase: phaseLabel, window: win)
+        }
+        if let c = imageCheck, c.seq == seq { return c.isImage }
+        let isImage = importer.looksLikeImage(info)
+        imageCheck = (seq, isImage)
+        return isImage
+    }
+
+    private func startHover(win: String, pos: String, via: String) {
+        phase = .hovering
+        Log.line("[HANDOFF]", "\(via) win=\(win) pos=\(pos) → Expand-Timer \(settings.expandDelayMs)ms")
+        scheduleExpand()
+    }
+
+    /// B4: Wiedereintritt nach draggingExited mit Cursor im Board – Dauer loggen (Grundlage für exitInsideGrace).
+    private func logReentry(_ win: String) {
+        if let exited = exitedInsideAt {
+            Log.line("[HANDOFF]", "Wiedereintritt nach \(Log.ms(since: exited))ms win=\(win) "
+                + "(exitInsideGrace=\(Int((DropboardConfig.exitInsideGrace ?? 0) * 1000))ms)")
+        }
+        exitedInsideAt = nil
+    }
+
+    private func logUpdateThrottled(_ view: DropTargetView, _ info: NSDraggingInfo, win: String) {
         let first = !updateLoggedAfterExpand.contains(win)
         if first || Log.now - view.lastUpdateLog >= DropboardConfig.updateLogInterval {
             updateLoggedAfterExpand.insert(win)
@@ -227,7 +329,6 @@ final class DragCoordinator: NSObject {
             Log.line("[HANDOFF]", "draggingUpdated\(first ? " (erstes nach Expand)" : "") win=\(win)\(sinceExpand()) "
                 + "mausBewegtSeitExpand=\(mouseMovedSinceExpand()) pos=\(fmt(screenPoint(view, info))) n=\(view.updateCount)")
         }
-        return .copy
     }
 
     func dragExited(_ view: DropTargetView, _ info: NSDraggingInfo?) {
@@ -261,6 +362,7 @@ final class DragCoordinator: NSObject {
 
     func prepareDrop(_ view: DropTargetView, _ info: NSDraggingInfo) -> Bool {
         dropReceived = true
+        prepareAt = Log.now
         cancelExpand()
         Log.line("[DROP]", "prepareForDragOperation win=\(name(of: view))\(sinceExpand())")
         return true
@@ -270,19 +372,14 @@ final class DragCoordinator: NSObject {
         dropReceived = true
         cancelExpand()
         let win = name(of: view)
-        let boardWasOpen = phase == .expanded
-        let viewing = phase == .viewing
-        let kind: String
-        if viewing {
-            kind = "Drop im Ansichtsmodus"
-        } else if isBoardTarget(view) {
-            kind = "Board-Drop"
-        } else if boardWasOpen {
-            kind = "Drop auf Eselsohr trotz offenem Board (Handoff fehlgeschlagen) → wie Board-Drop"
-        } else {
-            kind = "Quick-Drop"
-        }
+        let dropKind = DragRules.dropKind(phase: phase, onBoardTarget: isBoardTarget(view))
+        let boardWasOpen = dropKind.isBoardDropAtCursor
+        let viewing = dropKind == .viewing
+        let kind = dropKind.rawValue
         let dropScreen = screenPoint(view, info)
+        // C1: welches Panel hat den Drop bekommen? (Hardware-Nachweis für den Handoff, T4)
+        Log.line("[HANDOFF]", "Drop-Panel=\(view.role == .board ? "board" : "ear") win=\(win) phase=\(phase.rawValue) "
+            + "handoff=\(handoff.rawValue) → \(kind)")
         Log.line("[DROP]", "performDragOperation win=\(win) art=\(kind) dropPos=\(fmt(dropScreen)) "
             + "cursor=\(fmt(NSEvent.mouseLocation))\(sinceExpand())")
         if boardWasOpen {
@@ -310,6 +407,7 @@ final class DragCoordinator: NSObject {
             board.place(tickets, placement: .nextFreeSlot, dropMotion: nil)
             if phase == .hovering { phase = .idle }
         }
+        prepareAt = nil
         let ok = !tickets.isEmpty
         Log.line("[DROP]", "performDragOperation Rückgabe=\(ok) bilder=\(tickets.count)")
         diagnostics.logFocus("nach Drop")
@@ -353,8 +451,11 @@ final class DragCoordinator: NSObject {
 
     // MARK: Expand / Zuklappen / Schließen
 
+    private var hoverStartedAt: TimeInterval = 0
+
     private func scheduleExpand() {
         cancelExpand()
+        hoverStartedAt = Log.now
         perform(#selector(expandFired), with: nil, afterDelay: settings.expandDelay, inModes: [.common])
     }
 
@@ -364,23 +465,34 @@ final class DragCoordinator: NSObject {
 
     @objc private func expandFired() {
         guard phase == .hovering, !dropReceived else { return }
-        diagnostics.logFocus("vor Expand")
+        let scheduled = hoverStartedAt + settings.expandDelay
         phase = .expanded
         boardReached = false
         mouseMovedLogged = false
         noEnterWarned = false
         releaseSeenAt = nil
         exitedInsideAt = nil
+        prepareAt = nil
         updateLoggedAfterExpand.removeAll()
         mouseAtExpand = NSEvent.mouseLocation
         expandAt = Log.now
         let animated = presenter.openForDrag(reduceMotion: motion.effective)
+        let syncMs = Log.ms(since: expandAt)
+        // P6: Commit sofort erzwingen und messen, BEVOR irgendetwas geloggt oder abgefragt wird.
+        CATransaction.flush()
+        Log.line("[HANDOFF]", "Expand commit +\(Log.ms(since: expandAt))ms")
         Log.line("[HANDOFF]", "Expand ausgelöst mode=\(handoff.rawValue) maus=\(fmt(mouseAtExpand)) "
-            + "dauer(orderFront/setFrame)=\(Log.ms(since: expandAt))ms mausTaste=\(NSEvent.pressedMouseButtons)")
+            + "dauer(orderFront/setFrame)=\(syncMs)ms verspätung=\(String(format: "%.1f", (expandAt - scheduled) * 1000))ms "
+            + "mausTaste=\(NSEvent.pressedMouseButtons)")
         Log.line("[MOTION]", "RealtimeMotion reveal animated=\(animated) dauer=\(animated ? Int(RealtimeMotion.duration * 1000) : 0)ms "
             + "reduceMotion=\(motion.effective) abgedunkelt=\(board.scene.isDimmed)")
-        diagnostics.logWindows("nach Expand")
         startPolling()
+        // P6: Fokus-/Fenster-Diagnose (NSWorkspace, WindowServer-Abfragen) erst nach dem Commit, im nächsten Durchlauf.
+        afterDelay(0) { [weak self] in
+            guard let self = self else { return }
+            self.diagnostics.logFocus("nach Expand-Commit")
+            self.diagnostics.logWindows("nach Expand")
+        }
     }
 
     /// Ohne Drop: Realtime-Zuklappen (~200 ms), dann orderOut.
@@ -402,6 +514,7 @@ final class DragCoordinator: NSObject {
     /// Nach dem Drop (E8): ohne Realtime-Animation ausblenden, die Stop-Motion-Frames sind dann durch.
     @objc private func closeAfterDrop() {
         guard phase == .dropClosing else { return }
+        stopPolling()
         let t = Log.now
         presenter.closeImmediately()
         phase = .idle
@@ -416,6 +529,7 @@ final class DragCoordinator: NSObject {
         stopPolling()
         let timer = Timer(timeInterval: DropboardConfig.pollInterval, target: self,
                           selector: #selector(pollTick), userInfo: nil, repeats: true)
+        timer.tolerance = DropboardConfig.pollTolerance   // P8
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer
     }
@@ -425,36 +539,44 @@ final class DragCoordinator: NSObject {
         pollTimer = nil
     }
 
+    /// Entscheidung in `WatchdogRules.decide` (Selftest FixB): Obergrenze 30 s, Drop ohne perform (3 s),
+    /// Esc per Tastenzustand (B4), Austritt im Board ohne Wiedereintritt, Maustaste los ohne Drop.
     @objc private func pollTick() {
         guard phase == .expanded else { stopPolling(); return }
-        let elapsed = Log.now - expandAt
+        let now = Log.now
         // ⚠️ VERIFIZIEREN (aus Spike): NSEvent.mouseLocation / pressedMouseButtons liefern während eines fremden Drags aktuelle Werte.
         if !mouseMovedLogged && mouseMovedSinceExpand() {
             mouseMovedLogged = true
             Log.line("[HANDOFF]", "erste Mausbewegung nach Expand +\(Log.ms(since: expandAt))ms boardErreicht=\(boardReached) "
                 + "maus=\(fmt(NSEvent.mouseLocation))")
         }
-        if !boardReached && !noEnterWarned && elapsed >= DropboardConfig.noEnterWarnAfter {
+        if !boardReached && !noEnterWarned && now - expandAt >= DropboardConfig.noEnterWarnAfter {
             noEnterWarned = true
             Log.line("[HANDOFF]", "WARNUNG: \(Int(DropboardConfig.noEnterWarnAfter * 1000))ms nach Expand kein Drag-Ereignis "
                 + "auf dem Board (mausBewegtSeitExpand=\(mouseMovedSinceExpand()))")
         }
-        guard !dropReceived else { return }
-        if let exitedAt = exitedInsideAt, let grace = DropboardConfig.exitInsideGrace, Log.now - exitedAt >= grace {
-            collapse(reason: "Drag im Board abgebrochen (Esc), kein Wiedereintritt in \(Int(grace * 1000))ms")
-            return
-        }
-        if NSEvent.pressedMouseButtons & 1 == 0 {
-            if let released = releaseSeenAt {
-                if Log.now - released >= DropboardConfig.releaseGrace {
-                    collapse(reason: "Maustaste losgelassen, kein Drop innerhalb \(Int(DropboardConfig.releaseGrace * 1000))ms")
-                }
-            } else {
-                releaseSeenAt = Log.now
-                Log.line("[HANDOFF]", "Maustaste losgelassen (Polling)\(sinceExpand()) cursor=\(fmt(NSEvent.mouseLocation))")
-            }
-        } else {
+        let input = WatchdogInput(elapsed: now - expandAt,
+                                  dropReceived: dropReceived,
+                                  sincePrepare: prepareAt.map { now - $0 },
+                                  sinceExitedInside: exitedInsideAt.map { now - $0 },
+                                  mouseButtonDown: NSEvent.pressedMouseButtons & 1 != 0,
+                                  sinceRelease: releaseSeenAt.map { now - $0 },
+                                  escDown: !dropReceived && EscapeKey.isDown())
+        switch WatchdogRules.decide(input) {
+        case .none:
+            break
+        case .noteRelease:
+            releaseSeenAt = now
+            Log.line("[HANDOFF]", "Maustaste losgelassen (Polling)\(sinceExpand()) cursor=\(fmt(NSEvent.mouseLocation))")
+        case .clearRelease:
             releaseSeenAt = nil
+        case .collapse(let reason):
+            if reason == .escape {
+                Log.line("[HANDOFF]", "Esc erkannt (Tastenzustand)\(sinceExpand()) "
+                    + "austrittImBoardVor=\(exitedInsideAt.map { Log.ms(since: $0) + "ms" } ?? "–")")
+            }
+            collapse(reason: reason.text)
+            stopPolling()   // collapse stoppt nur aus `expanded`; hier in jedem Fall
         }
     }
 }

@@ -30,11 +30,28 @@ enum DropboardConfig {
 
     // Watchdog, solange das Board während eines Drags offen ist (wie Spike)
     static let pollInterval: TimeInterval = 0.02
+    /// P8: Timer-Toleranz des Watchdogs (Coalescing erlaubt, Esc/Loslassen bleiben < 25 ms).
+    static let pollTolerance: TimeInterval = 0.005
+    /// P8: harte Obergrenze – länger als das bleibt das Board während eines Drags nie offen (danach Zuklappen).
+    static let watchdogMaxDuration: TimeInterval = 30
+    /// P8: prepareForDragOperation ohne folgendes performDragOperation → nach dieser Zeit zuklappen.
+    static let dropPerformTimeout: TimeInterval = 3
     /// Maustaste los, aber kein Drop → nach dieser Zeit zuklappen.
     static let releaseGrace: TimeInterval = 0.5
     /// draggingExited, obwohl der Cursor noch im Board liegt (Esc bricht den Drag ab) → nach dieser Zeit
     /// ohne Wiedereintritt zuklappen. `nil` = Spike-Verhalten (nur draggingEnded/Maustaste).
-    static let exitInsideGrace: TimeInterval? = 0.3
+    /// B4: von 300 auf 150 ms gesenkt; Esc selbst erkennt der Watchdog zusätzlich direkt (EscapeKey).
+    /// ⚠️ VERIFIZIEREN: Ein regulärer Wiedereintritt (Log `Wiedereintritt nach …ms`) liegt auf Hardware unter 150 ms.
+    static let exitInsideGrace: TimeInterval? = 0.15
+    /// Virtueller Tastencode Esc (kVK_Escape).
+    static let escKeyCode: UInt16 = 53
+    /// Ansichtsmodus: Esc-Rückfallweg per Tastenzustand, nur solange kein Dropboard-Panel key ist (C16).
+    static let viewEscPollInterval: TimeInterval = 0.05
+
+    /// S1: Bundle-ID von Dropboard.app (app/Packaging/Info.plist); ohne Bundle (swift run) kein Instanz-Check.
+    static let bundleIdentifier = "app.dropboard.Dropboard"
+    /// P7: Logdatei ab dieser Größe nach `<datei>.1` rotieren.
+    static let logRotateBytes: UInt64 = 5 * 1024 * 1024
     static let noEnterWarnAfter: TimeInterval = 1.0
     static let updateLogInterval: TimeInterval = 0.25
 
@@ -67,9 +84,165 @@ enum ScreenGeometry {
         return visible.insetBy(dx: m, dy: m)
     }
 
-    /// Bildschirm unter dem Mauszeiger (Report 02, Abschnitt 5), Fallback NSScreen.main.
-    static func screenUnderMouse() -> NSScreen {
-        let p = NSEvent.mouseLocation
-        return NSScreen.screens.first { $0.frame.contains(p) } ?? NSScreen.main ?? NSScreen.screens[0]
+    /// C2/C18/B12: Bildschirm fürs Eselsohr = primärer Bildschirm (mit Menüleiste), `nil` ohne Bildschirm (kein Crash).
+    /// Apple-Doku `NSScreen.screens` [Report 02, A37]: „The screen at index 0 … corresponds to the primary screen …
+    /// This is the screen that contains the menu bar“. `NSScreen.main` ist dagegen der Bildschirm mit dem Key-Window
+    /// (A38), also der der Ursprungs-App – dafür ungeeignet.
+    /// ⚠️ VERIFIZIEREN: Zitat aus der Apple-Doku zu `screens` hier aus dem Gedächtnis, im Report 02 nur verlinkt.
+    static func primaryScreen() -> NSScreen? {
+        let screens = NSScreen.screens
+        return ScreenChoice.earScreenIndex(screenCount: screens.count).map { screens[$0] }
     }
+}
+
+/// Reine Bildschirmwahl (Selftest FixB).
+enum ScreenChoice {
+    /// Index in `NSScreen.screens` fürs Eselsohr: 0 (Hauptbildschirm mit Menüleiste) oder nil ohne Bildschirm.
+    static func earScreenIndex(screenCount: Int) -> Int? {
+        screenCount > 0 ? 0 : nil
+    }
+}
+
+/// Esc-Taste per Tastenzustand abfragen (B4 während des Drags, C16 als Rückfallweg im Ansichtsmodus).
+/// Kein Event-Monitor: ein globaler KeyDown-Monitor bräuchte Accessibility (Report 01, Abschnitt 6) und wird
+/// deshalb NICHT verwendet.
+/// ⚠️ VERIFIZIEREN: `CGEventSource.keyState(.combinedSessionState, key:)` liefert den echten Zustand von Esc OHNE
+/// Eingabeüberwachung/Accessibility und löst keinen TCC-Dialog aus. Nicht belegt. Nachweis auf Hardware: Log
+/// `[HANDOFF] Esc erkannt (Tastenzustand)` bzw. `[VIEW] Esc erkannt (Tastenzustand-Rückfallweg)`; fehlt die Zeile
+/// bei gedrückter Esc-Taste, liefert die API ohne Berechtigung nichts (dann greifen exitInsideGrace bzw. Klick).
+enum EscapeKey {
+    static func isDown() -> Bool {
+        CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(DropboardConfig.escKeyCode))
+    }
+}
+
+/// Phasen des Zustandsautomaten (DragCoordinator). Top-Level und ohne Actor, damit der Selftest sie benutzen kann.
+enum DragPhase: String {
+    case idle, hovering, expanded, collapsing, dropClosing, viewing, viewClosing
+
+    /// Teil einer Drag-Session (Eselsohr/Board): solange läuft die Aktivitäts-Assertion (P14).
+    var isDragSession: Bool {
+        switch self {
+        case .hovering, .expanded, .collapsing, .dropClosing: return true
+        case .idle, .viewing, .viewClosing: return false
+        }
+    }
+}
+
+/// Reine Entscheidungen des Zustandsautomaten (Selftest FixB).
+enum DragRules {
+    /// Antwort des Eselsohrs (two-panels, oder grow vor dem Expand) auf draggingEntered/draggingUpdated –
+    /// nicht im Ansichtsmodus (eigener Zweig).
+    enum EarAnswer: Equatable {
+        case reject        // [] – nichts passiert
+        case startHover    // .copy, Phase → hovering, Expand-Timer starten
+        case keepHover     // .copy, Timer läuft schon
+        case boardDrop     // .copy: Board ist offen (expanded), ein Drop hier gilt als Board-Drop an Cursor (C1)
+    }
+
+    static func earDrag(phase: DragPhase, isImage: Bool) -> EarAnswer {
+        guard isImage else { return .reject }
+        switch phase {
+        case .idle: return .startHover          // C12: auch aus draggingUpdated, wenn die Phase inzwischen idle ist
+        case .hovering: return .keepHover
+        case .expanded: return .boardDrop       // C1: nicht mehr hart ablehnen
+        case .collapsing, .dropClosing, .viewing, .viewClosing: return .reject
+        }
+    }
+
+    enum DropKind: String {
+        case viewing = "Drop im Ansichtsmodus"
+        case board = "Board-Drop"
+        case earWhileOpen = "Drop auf Eselsohr trotz offenem Board (Handoff nicht übernommen) → Board-Drop an Cursor"
+        case quick = "Quick-Drop"
+        case late = "Drop während Zuklappen → wie Quick-Drop"
+
+        /// Board-Drop an Cursor (mit dropClosing), sonst nächste freie Stelle bzw. Ansichtsmodus.
+        var isBoardDropAtCursor: Bool { self == .board || self == .earWhileOpen }
+    }
+
+    static func dropKind(phase: DragPhase, onBoardTarget: Bool) -> DropKind {
+        switch phase {
+        case .viewing: return .viewing
+        case .expanded: return onBoardTarget ? .board : .earWhileOpen
+        case .idle, .hovering: return .quick
+        case .collapsing, .dropClosing, .viewClosing: return .late
+        }
+    }
+}
+
+/// Watchdog während des offenen Boards (P8, B4): reine Entscheidung pro Tick (Selftest FixB).
+struct WatchdogInput {
+    var elapsed: TimeInterval                 // seit Expand
+    var dropReceived = false
+    var sincePrepare: TimeInterval?           // seit prepareForDragOperation
+    var sinceExitedInside: TimeInterval?      // seit draggingExited mit Cursor im Board
+    var mouseButtonDown = true
+    var sinceRelease: TimeInterval?           // seit erstmals „Maustaste los“ gesehen
+    var escDown = false
+}
+
+enum WatchdogReason: Equatable {
+    case maxDuration, performMissing, escape, exitInside, released
+
+    var text: String {
+        switch self {
+        case .maxDuration: return "Watchdog-Obergrenze \(Int(DropboardConfig.watchdogMaxDuration)) s erreicht"
+        case .performMissing: return "prepareForDragOperation ohne performDragOperation in \(Int(DropboardConfig.dropPerformTimeout)) s"
+        case .escape: return "Esc erkannt (Tastenzustand)"
+        case .exitInside: return "Drag im Board abgebrochen (Esc), kein Wiedereintritt in \(Int((DropboardConfig.exitInsideGrace ?? 0) * 1000))ms"
+        case .released: return "Maustaste losgelassen, kein Drop innerhalb \(Int(DropboardConfig.releaseGrace * 1000))ms"
+        }
+    }
+}
+
+enum WatchdogAction: Equatable {
+    case none, noteRelease, clearRelease
+    case collapse(WatchdogReason)
+}
+
+enum WatchdogRules {
+    static func decide(_ i: WatchdogInput) -> WatchdogAction {
+        if i.elapsed >= DropboardConfig.watchdogMaxDuration { return .collapse(.maxDuration) }
+        if i.dropReceived {
+            if let p = i.sincePrepare, p >= DropboardConfig.dropPerformTimeout { return .collapse(.performMissing) }
+            return .none
+        }
+        if i.escDown { return .collapse(.escape) }
+        if let e = i.sinceExitedInside, let grace = DropboardConfig.exitInsideGrace, e >= grace { return .collapse(.exitInside) }
+        if !i.mouseButtonDown {
+            guard let r = i.sinceRelease else { return .noteRelease }
+            return r >= DropboardConfig.releaseGrace ? .collapse(.released) : .none
+        }
+        return i.sinceRelease == nil ? .none : .clearRelease
+    }
+}
+
+/// S1: Single-Instance-Schutz (reine Logik, Selftest FixB).
+struct InstanceInfo {
+    let pid: Int32
+    let launchDate: Date?
+}
+
+enum SingleInstance {
+    /// Andere Instanz, der diese weichen soll (nil = weiterlaufen). Ohne Bundle-ID (swift run) kein Check.
+    /// Die ältere Instanz gewinnt; bei gleicher oder fehlender Startzeit die kleinere PID – so beenden sich zwei
+    /// gleichzeitig gestartete Instanzen nicht gegenseitig.
+    static func instanceToYieldTo(ownPID: Int32, ownLaunch: Date?, bundleID: String?, running: [InstanceInfo]) -> InstanceInfo? {
+        guard let id = bundleID, !id.isEmpty else { return nil }
+        return running
+            .filter { $0.pid != ownPID && wins($0, overPID: ownPID, launch: ownLaunch) }
+            .min { wins($0, overPID: $1.pid, launch: $1.launchDate) }
+    }
+
+    static func wins(_ other: InstanceInfo, overPID pid: Int32, launch: Date?) -> Bool {
+        if let o = other.launchDate, let s = launch, o != s { return o < s }
+        return other.pid < pid
+    }
+}
+
+/// P7: Rotation der Logdatei (reine Logik, Selftest FixB).
+enum LogRotation {
+    static func shouldRotate(size: UInt64, limit: UInt64) -> Bool { size >= limit }
+    static func rotatedPath(_ path: String) -> String { path + ".1" }
 }

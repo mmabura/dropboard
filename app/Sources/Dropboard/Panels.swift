@@ -22,9 +22,14 @@ final class DropboardPanel: NSPanel {
         level = .statusBar   // zuletzt setzen (Report 02, Hinweis zu isFloatingPanel)
     }
 
-    // Wie Spike: darf key werden (Klick, makeKey), wird aber nie aktiviert. Der Ansichtsmodus (Schritt 7) braucht das
-    // für Esc und Backspace/Entf (lokaler Key-Monitor in ViewModeController).
-    override var canBecomeKey: Bool { true }
+    /// C3/C16: key-fähig NUR im Ansichtsmodus (Esc, Backspace/Entf über den lokalen Key-Monitor in ViewModeController).
+    /// BoardPresenter setzt das Flag beim Öffnen des Ansichtsmodus und nimmt es beim Schließen VOR dem orderOut
+    /// zurück – sonst macht AppKit das sichtbare Eselsohr zum nächsten Key-Window und Tasten landen bei Dropboard
+    /// statt in der Ursprungs-App. Im Ruhezustand und während eines Drags nie key (Phase 0: dort nicht nötig).
+    /// ⚠️ VERIFIZIEREN: Ein Klick auf ein Panel mit canBecomeKey == false liefert trotzdem mouseDown
+    /// (acceptsFirstMouse == true) – Log `[WIN] Klick auf ear ohne Drag → Ansichtsmodus`.
+    var allowsKey = false
+    override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
 }
 
