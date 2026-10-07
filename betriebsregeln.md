@@ -32,6 +32,12 @@ Dort kann Swift/AppKit-Code weder gebaut noch ausgeführt werden. Jeder Nachweis
 werden. Ein Agent, der so einen Nachweis behauptet, ohne ihn erbracht zu haben,
 verletzt diese Regeln.
 
+**Testumgebung macOS:** Max' Mac mini, angebunden als Remote-Control-Session
+(`claude remote-control`, Branch `claude/relaxed-bell-vahe5z`). Der Orchestrator
+schickt Build- und Testaufträge dorthin. Interaktive Gesten (Screenshot-Thumbnail
+ziehen, Fullscreen-App) führt Max aus; Nachweis ist das Log der App
+(empfangene Pasteboard-Typen, Fenster-Level, Zeitstempel).
+
 ## Definition of Done
 
 ### Phase 0 – Recherche
