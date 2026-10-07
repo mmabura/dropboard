@@ -55,8 +55,9 @@ final class ExportController {
                                     date: date, creator: "Dropboard \(StatusMenuController.versionText)")
         isRunning = true
         onStateChange?()
+        // Offene Platzhalter (Datei noch nicht da) stehen nicht im Dokument und fehlen im Export – bewusst.
         Log.line("[EXPORT]", "Export angefordert grund=\(reason) \(settings.exportSummary) items=\(board.document.items.count) "
-            + "ziel=\(url.path)")
+            + "platzhalter=\(board.pendingCount) (ausgelassen) ziel=\(url.path)")
         let t = Log.now
         Exporter.exportInBackground(document: board.document, store: board.store, request: request, to: url) { [weak self] outcome in
             self?.finish(outcome, mainMs: Log.ms(since: t))

@@ -217,8 +217,8 @@ enum Exporter {
                     drawPaper(ctx, in: page, noiseTile: tile, tileRect: tileRect)
                     let scene = buildItemLayers(document: document, store: store, rect: rect, scale: plan.scale)
                     layerStats = scene.stats
-                    // ⚠️ VERIFIZIEREN: CALayer.render(in:) in einen PDF-Kontext – harter Schatten (shadowPath),
-                    // Rotation und contentsRect (Beschnitt) im PDF wie im PNG? Deshalb nicht Standard.
+                    // Basisraum des PDF-Kontexts = pt → Schattenversatz ohne Umrechnung richtig (Mac mini, a96bf0f).
+                    // Noch nicht Standard: Rotation/contentsRect im PDF nur per Auge geprüft, Farbe siehe README.
                     scene.root.render(in: ctx)
                 }
                 stats = layerStats
@@ -315,11 +315,14 @@ enum Exporter {
                   tileRect: tile.map { CGRect(x: 0, y: 0, width: $0.width, height: $0.height) } ?? .zero)
         let sx = CGFloat(pw) / rect.width, sy = CGFloat(ph) / rect.height
         let scene = buildItemLayers(document: document, store: store, rect: rect, scale: Double(max(sx, sy)))
-        ctx.saveGState()
-        ctx.scaleBy(x: sx, y: sy)
-        scene.root.render(in: ctx)
-        ctx.restoreGState()
+        // Schatten in pt (render(in:) setzt shadowOffset sonst in Gerätepixeln, Befund a96bf0f) → LayerRender.
+        LayerRender.render(scene.root, in: ctx, scaleX: sx, scaleY: sy)
         guard let image = ctx.makeImage() else { throw ExportFailure("Bitmap → Bild fehlgeschlagen") }
+        // Farbe: Kontext und Bild sind explizit sRGB; das PNG trägt das Profil, im PDF liegt das Bild als
+        // ICC-getaggtes sRGB-Bild (CoreGraphics bettet den Farbraum des CGImage ein).
+        if image.colorSpace?.name != CGColorSpace.sRGB {
+            Log.line("[EXPORT]", "WARNUNG Bitmap-Farbraum \(image.colorSpace?.name.map { $0 as String } ?? "nil") statt sRGB")
+        }
         return (image, scene.stats)
     }
 

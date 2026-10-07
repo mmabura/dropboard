@@ -33,6 +33,8 @@ final class BoardController: ImportSink {
     var usableArea: CGRect
     private(set) var document = BoardDocument()
     private var pending: [UUID: PendingItem] = [:]
+    /// Offene Platzhalter (Promise/Dekodieren läuft). Nicht im Dokument → im Export (E12) bewusst ausgelassen.
+    var pendingCount: Int { pending.count }
     private var rng: SplitMix64
     private let saveQueue = BoardSaveQueue()
     /// C20: board.json war nicht lesbar UND ließ sich nicht wegsichern → in dieser Sitzung nie überschreiben.

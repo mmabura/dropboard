@@ -169,15 +169,15 @@ enum Snapshot {
 
     // ⚠️ VERIFIZIEREN: CALayer.render(in:) kommt in keinem Spike vor. Laut Doku rendert es keine Masken und keine
     // 3D-Transforms; unsere Rotation ist eine reine z-Rotation (affin). Prüfen: Schatten und Rotation im PNG sichtbar.
-    // ⚠️ VERIFIZIEREN: CGContext.scaleBy(x:y:) (Punkte → Pixel) ebenfalls nicht aus einem Spike.
+    // CGContext.scaleBy(x:y:) (Punkte → Pixel): auf dem Mac mini belegt (Export E12, Pixelmaße exakt).
     static func renderPNG(_ layer: CALayer, size: CGSize, scale: CGFloat, to url: URL) throws {
         let pw = Int((size.width * scale).rounded()), ph = Int((size.height * scale).rounded())
         guard pw > 0, ph > 0, let cs = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { throw CocoaError(.fileWriteUnknown) }
-        ctx.scaleBy(x: scale, y: scale)
-        layer.render(in: ctx)
+        // Schatten in pt wie am Bildschirm (Befund E12: render(in:) setzt shadowOffset in Gerätepixeln) → LayerRender.
+        LayerRender.render(layer, in: ctx, scaleX: scale, scaleY: scale)
         guard let image = ctx.makeImage() else { throw CocoaError(.fileWriteUnknown) }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try PaperArt.writePNG(image, to: url)
@@ -225,5 +225,41 @@ enum Snapshot {
         }
         try store.save(document)
         Log.line("[STORE]", "Snapshot-Demo: \(document.items.count) Bilder in temporärem Board \(store.boardDirectory.path)")
+    }
+}
+
+/// Layer-Baum per `CALayer.render(in:)` in einen skalierten Kontext (pt → Pixel) zeichnen, mit Schatten in pt.
+///
+/// Befund (Mac mini, Export E12, Commit a96bf0f): Im Bitmap-Pfad war der harte Schatten bei 300 dpi nur ~2 px statt
+/// 2 pt × 300/72 ≈ 8 px breit; im PDF-Kontext (Basisraum = pt) stimmte er. Ursache: render(in:) zeichnet den Schatten
+/// per CoreGraphics, und dort gilt der Schattenversatz im Basis-/Geräteraum – die CTM-Skalierung (scaleBy) wirkt nicht
+/// darauf (Apple-Doku zu CGContextSetShadowWithColor: offset „in base-space units“; hier aus dem Gedächtnis,
+/// ⚠️ VERIFIZIEREN – das Messergebnis oben ist der Beleg). Gegenmittel: shadowOffset aller Layer mit Schatten für die
+/// Dauer des Renderns × Skala setzen (Richtung bleibt: Basisraum der Bitmap ist y-oben wie die Layer), danach
+/// zurücksetzen. Der Schattenpfad (shadowPath) selbst folgt der CTM und braucht nichts. Radius ist 0 (kein Blur).
+/// Nicht an einen Actor gebunden (Export rendert auf einer Hintergrund-Queue).
+enum LayerRender {
+    /// Versatz in Gerätepixeln für einen Versatz in pt bei Skala sx/sy (px pro pt).
+    static func deviceShadowOffset(_ offset: CGSize, scaleX: CGFloat, scaleY: CGFloat) -> CGSize {
+        CGSize(width: offset.width * scaleX, height: offset.height * scaleY)
+    }
+
+    static func render(_ layer: CALayer, in ctx: CGContext, scaleX: CGFloat, scaleY: CGFloat) {
+        var saved: [(CALayer, CGSize)] = []
+        var stack: [CALayer] = [layer]
+        while let l = stack.popLast() {
+            if l.shadowOpacity > 0 && l.shadowOffset != .zero { saved.append((l, l.shadowOffset)) }
+            stack.append(contentsOf: l.sublayers ?? [])
+        }
+        withoutImplicitAnimations {
+            for (l, offset) in saved { l.shadowOffset = deviceShadowOffset(offset, scaleX: scaleX, scaleY: scaleY) }
+        }
+        ctx.saveGState()
+        ctx.scaleBy(x: scaleX, y: scaleY)
+        layer.render(in: ctx)
+        ctx.restoreGState()
+        withoutImplicitAnimations {
+            for (l, offset) in saved { l.shadowOffset = offset }
+        }
     }
 }

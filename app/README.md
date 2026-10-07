@@ -207,6 +207,12 @@ Einstellungen in `UserDefaults`: `dropboard.exportFormat` (`png|pdf|folder`), `d
 **Look:** eigene Offscreen-Szene, keine UI-Layer (kein Eselsohr, keine Auswahl, keine Griffe, keine Abdunklung). Papier
 (`paperHex`) und Noise werden direkt in den Bitmap-Kontext gezeichnet, die Bilder als Layer wie am Bildschirm (harter
 Schatten per `shadowPath`, Kipp, Beschnitt per `contentsRect`) per `CALayer.render(in:)` mit `scaleBy(px/pt)` darüber.
+Befund a96bf0f (Mac mini): `render(in:)` setzt `shadowOffset` in Gerätepixeln, die CTM-Skalierung wirkt nicht darauf
+(300 dpi: Schatten ~2 px statt ~8 px; im PDF-Kontext, Basisraum = pt, richtig). Deshalb rendern Export-Bitmap **und
+Snapshot** über `LayerRender.render` (Snapshot.swift): Schattenversätze für die Dauer des Renderns × Skala, danach
+zurück. Selftest `export shadow: …` misst die Breite bei 72/300 dpi und @2x.
+Offene Platzhalter (Datei eines Promise noch nicht da) stehen nicht im Dokument und werden **bewusst ausgelassen**
+(Log `platzhalter=N (ausgelassen)`).
 Die Noise-Kachel wird auf `256 × Exportskala ÷ Bildschirm-Scale` px skaliert (vergrößert ohne Interpolation,
 verkleinert mit), damit ein Kachelpixel physisch so groß ist wie am Bildschirm (1 Device-Pixel) – gleiche Körnung bei
 jeder DPI.
@@ -315,7 +321,7 @@ macOS-Version, Ergebnis, Logzeilen. Die erwarteten Zeilen sind Hypothesen, Abwei
 
 | # | Zeile der Interaktionstabelle / Schritt | Aktion | Erwartet (Log) | Prüfen (Auge) |
 |---|---|---|---|---|
-| 0 | Selftest/Snapshot | `swift run Dropboard --selftest`; `--snapshot /tmp/db.png --snapshot-demo`, dann mit `--snapshot-dimmed` | `185/185 PASS` (96 + 47 `view:` + 42 `settings:`), Exit 0; `[WIN] Snapshot Board geschrieben … items=5`, `[WIN] Snapshot Eselsohr geschrieben …-ear.png` | PNG: Off-White + Noise, harte Schatten 1–2 px unten rechts, Kipp ±1–2°, ein leeres Platzhalter-Rechteck, Eselsohr als Papiereck |
+| 0 | Selftest/Snapshot | `swift run Dropboard --selftest`; `--snapshot /tmp/db.png --snapshot-demo`, dann mit `--snapshot-dimmed` | `185/185 PASS` (96 + 47 `view:` + 42 `settings:`), Exit 0; `[WIN] Snapshot Board geschrieben … items=5`, `[WIN] Snapshot Eselsohr geschrieben …-ear.png` | PNG: Off-White + Noise, harte Schatten 2 pt (@2x 4 px) unten rechts, Kipp ±1–2°, ein leeres Platzhalter-Rechteck, Eselsohr als Papiereck |
 | 1 | Eselsohr (Schritt 1) | Start | `[WIN] Start Dropboard handoff=two-panels …`, `[WIN] Start ear … level=25 … visible=true`, `[WIN] Start board … visible=false`, `[FOCUS] Start … NSApp.isActive=false`, `[STORE] geladen items=…` | ca. 40 pt oben rechts, 12 pt eingerückt, knapp unter der Menüleiste, gedämpft, ohne Schatten, kein Dock-Icon |
 | 1b | Eselsohr still | beliebigen Drag starten, nicht aufs Eselsohr | keine Zeile | keine Reaktion, keine Idle-Animation |
 | 1c | über allen Fenstern | Space wechseln; Safari nativ Vollbild | `[WIN] Space-Wechsel ear … onActiveSpace=true visible=true` | Eselsohr auf jedem Space und über der Vollbild-App |

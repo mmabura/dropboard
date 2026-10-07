@@ -15,6 +15,7 @@ enum ExportSelfTest {
         naming(t)
         settingsAndOptions(t)
         render(t)
+        shadowWidth(t)
     }
 
     // MARK: Hilfen
@@ -294,6 +295,155 @@ enum ExportSelfTest {
         return ok ? (w, h, buf) : nil
     }
 
+    private static func closeTo(_ c: (Int, Int, Int), _ hex: UInt32, _ tol: Int) -> Bool {
+        abs(c.0 - Int((hex >> 16) & 0xFF)) <= tol && abs(c.1 - Int((hex >> 8) & 0xFF)) <= tol && abs(c.2 - Int(hex & 0xFF)) <= tol
+    }
+
+    private static func hexString(_ c: (Int, Int, Int)) -> String { String(format: "#%02X%02X%02X", c.0, c.1, c.2) }
+
+    /// PDF-Seite 1 per CoreGraphics in eine sRGB-Bitmap (1 px = 1 pt) rastern und Farben an Board-Punkten lesen.
+    // ⚠️ VERIFIZIEREN: CGContext.drawPDFPage(_:) zeichnet die MediaBox ab dem Ursprung (Seite beginnt bei 0,0).
+    private static func pdfColors(_ url: URL, rect: CGRect, points: [CGPoint]) -> [(Int, Int, Int)]? {
+        guard let page = CGPDFDocument(url as CFURL)?.page(at: 1), let cs = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let w = Int(rect.width.rounded()), h = Int(rect.height.rounded())
+        guard w > 0, h > 0 else { return nil }
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        let ok = buf.withUnsafeMutableBytes { raw -> Bool in
+            guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            ctx.drawPDFPage(page)
+            return true
+        }
+        guard ok else { return nil }
+        return points.map { p in
+            let x = min(w - 1, max(0, Int(p.x - rect.minX)))
+            let y = min(h - 1, max(0, Int(p.y - rect.minY)))
+            let i = (y * w + x) * 4
+            return (Int(buf[i]), Int(buf[i + 1]), Int(buf[i + 2]))
+        }
+    }
+
+    /// Breite des harten Schattens in Pixeln entlang eines Strahls ab `start` (Pixel, Zeile 0 oben) in Richtung (dx, dy):
+    /// Summe der Abdunklung je Pixel = (Papier − R) ÷ (Papier − Schatten-R), auf [0, 1] begrenzt; Werte < 0,08 (Noise)
+    /// zählen nicht. Das Bild ist papierfarben, also zählt nur der Schatten – auch kantengeglättete Randpixel anteilig.
+    private static func shadowPixels(_ px: (width: Int, height: Int, data: [UInt8]), start: (Int, Int), step: (Int, Int),
+                                     count: Int, paperR: Double) -> Double {
+        // Schatten: Graphit #3A2E22 mit Deckkraft 0,65 über Papier → R ≈ 0,65 × 0x3A + 0,35 × Papier.
+        let shadowR = Double(PaperStyle.shadowOpacity) * Double((PaperStyle.graphiteHex >> 16) & 0xFF)
+            + (1 - Double(PaperStyle.shadowOpacity)) * paperR
+        var sum = 0.0
+        for k in 0..<count {
+            let x = start.0 + step.0 * k, y = start.1 + step.1 * k
+            guard x >= 0, y >= 0, x < px.width, y < px.height else { break }
+            let r = Double(px.data[(y * px.width + x) * 4])
+            let d = min(1, max(0, (paperR - r) / (paperR - shadowR)))
+            if d >= 0.08 { sum += d }
+        }
+        return sum
+    }
+
+    /// Befund a96bf0f: Schatten im Bitmap-Pfad war in Gerätepixeln statt pt. Prüft (1) LayerRender bei Scale 2 und
+    /// (2) Export bei 72 und 300 dpi: Schattenbreite ≈ 2 pt × dpi ÷ 72 ± 1 px, rechts und unten.
+    private static func shadowWidth(_ t: SelfTestChecker) {
+        func check(_ name: String, _ ok: Bool) { t.check("export shadow: " + name, ok) }
+        check("Umrechnung: (2, −2) pt bei 4,1667 px/pt → (8,33, −8,33) px (Richtung bleibt)",
+              LayerRender.deviceShadowOffset(CGSize(width: 2, height: -2), scaleX: 300.0 / 72, scaleY: 300.0 / 72)
+                == CGSize(width: 2 * 300.0 / 72, height: -2 * 300.0 / 72))
+        let paperR = Double((PaperStyle.paperHex >> 16) & 0xFF)
+
+        // (1) LayerRender direkt: Root 40×40 pt Papier, Item 20×20 pt papierfarben mit Schatten, Scale 2 → 4 px.
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB) else { check("sRGB", false); return }
+        func renderSmall(useHelper: Bool) -> (width: Int, height: Int, data: [UInt8])? {
+            let root = CALayer(), layer = CALayer()
+            withoutImplicitAnimations {
+                root.frame = CGRect(x: 0, y: 0, width: 40, height: 40)
+                root.backgroundColor = PaperStyle.cgColor(PaperStyle.paperHex)
+                layer.bounds = CGRect(x: 0, y: 0, width: 20, height: 20)
+                layer.position = CGPoint(x: 20, y: 20)
+                layer.backgroundColor = PaperStyle.cgColor(PaperStyle.paperHex)
+                layer.shadowColor = PaperStyle.cgColor(PaperStyle.graphiteHex)
+                layer.shadowOpacity = PaperStyle.shadowOpacity
+                layer.shadowRadius = 0
+                layer.shadowOffset = PaperStyle.shadowOffset
+                layer.shadowPath = CGPath(rect: layer.bounds, transform: nil)
+                root.addSublayer(layer)
+            }
+            var buf = [UInt8](repeating: 0, count: 80 * 80 * 4)
+            let ok = buf.withUnsafeMutableBytes { raw -> Bool in
+                guard let ctx = CGContext(data: raw.baseAddress, width: 80, height: 80, bitsPerComponent: 8, bytesPerRow: 320,
+                                          space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                else { return false }
+                if useHelper {
+                    LayerRender.render(root, in: ctx, scaleX: 2, scaleY: 2)
+                } else {
+                    ctx.scaleBy(x: 2, y: 2)
+                    root.render(in: ctx)
+                }
+                return true
+            }
+            let restored = layer.shadowOffset == PaperStyle.shadowOffset
+            return ok && restored ? (80, 80, buf) : nil
+        }
+        if let fixed = renderSmall(useHelper: true), let plain = renderSmall(useHelper: false) {
+            // Mitte (40, 40) px; Item reicht bis 60 px. Nach rechts bzw. unten (Zeile 0 oben) messen.
+            let right = shadowPixels(fixed, start: (40, 40), step: (1, 0), count: 40, paperR: paperR)
+            let down = shadowPixels(fixed, start: (40, 40), step: (0, 1), count: 40, paperR: paperR)
+            let plainRight = shadowPixels(plain, start: (40, 40), step: (1, 0), count: 40, paperR: paperR)
+            Log.line("[EXPORT]", String(format: "Selftest Schatten @2x: LayerRender rechts=%.2f unten=%.2f px, "
+                + "render(in:) ohne Umrechnung rechts=%.2f px (Befund: Gerätepixel)", right, down, plainRight))
+            check(String(format: "LayerRender @2x: Schatten rechts %.2f px, unten %.2f px ≈ 4 px (2 pt), Versatz danach zurückgesetzt",
+                         right, down), abs(right - 4) <= 1 && abs(down - 4) <= 1)
+        } else {
+            check("LayerRender @2x rendern (und shadowOffset zurückgesetzt)", false)
+        }
+
+        // (2) Export bei 72 und 300 dpi, papierfarbenes Bild ohne Kipp.
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("dropboard-selftest-shadow-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        let store = BoardStore(boardDirectory: root.appendingPathComponent("board", isDirectory: true))
+        let it = item(CGPoint(x: 200, y: 150), CGSize(width: 220, height: 146), fileName: "P.png")
+        let document = BoardDocument(items: [it])
+        do {
+            try store.prepareDirectories()
+            guard let ctx = CGContext(data: nil, width: 660, height: 438, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw CocoaError(.fileWriteUnknown) }
+            ctx.setFillColor(PaperStyle.cgColor(PaperStyle.paperHex))
+            ctx.fill(CGRect(x: 0, y: 0, width: 660, height: 438))
+            guard let image = ctx.makeImage() else { throw CocoaError(.fileWriteUnknown) }
+            try PaperArt.writePNG(image, to: store.imageURL(fileName: "P.png"))
+        } catch {
+            check("Test-Board anlegen (\(error))", false)
+            return
+        }
+        for dpi in [72, 300] {
+            let url = root.appendingPathComponent("schatten-\(dpi).png")
+            let request = ExportRequest(format: .png, dpi: dpi, area: .content, boardSize: CGSize(width: 1000, height: 700),
+                                        screenScale: 2)
+            guard let result = try? Exporter.run(document: document, store: store, request: request, to: url),
+                  let rect = result.rect, let px = readPixels(url) else {
+                check("Export \(dpi) dpi", false)
+                continue
+            }
+            let sx = CGFloat(px.width) / rect.width, sy = CGFloat(px.height) / rect.height
+            let center = it.center.cgPoint
+            let cx = Int(((center.x - rect.minX) * sx).rounded(.down))
+            let cy = Int(((center.y - rect.minY) * sy).rounded(.down))
+            let corner = px.data[(2 * px.width + 2) * 4]   // Papier mit Noise, oben links
+            let paper = Double(corner)
+            let reach = Int((CGFloat(it.size.width) / 2 + 8) * sx)
+            let right = shadowPixels(px, start: (cx, cy), step: (1, 0), count: reach, paperR: paper)
+            let down = shadowPixels(px, start: (cx, cy), step: (0, 1), count: reach, paperR: paper)
+            let expectX = 2 * Double(sx), expectY = 2 * Double(sy)
+            check(String(format: "%ld dpi: Schatten rechts %.2f px (erwartet %.2f), unten %.2f px (erwartet %.2f) ± 1 px",
+                         dpi, right, expectX, down, expectY),
+                  abs(right - expectX) <= 1 && abs(down - expectY) <= 1)
+        }
+    }
+
     private static func render(_ t: SelfTestChecker) {
         func check(_ name: String, _ ok: Bool) { t.check("export render: " + name, ok) }
         let fm = FileManager.default
@@ -355,6 +505,9 @@ enum ExportSelfTest {
                 let dyText = dy.map { String(format: "%.2f", $0) } ?? "fehlt"
                 let dpiOK = dx.map { abs($0 - 144) < 0.5 } == true && dy.map { abs($0 - 144) < 0.5 } == true
                 check("PNG zurückgelesen: DPI-Property \(dxText)×\(dyText) ≈ 144", dpiOK)
+                // ⚠️ VERIFIZIEREN: ImageIO meldet das eingebettete Profil als kCGImagePropertyProfileName („sRGB IEC61966-2.1“).
+                let profile = props[kCGImagePropertyProfileName] as? String
+                check("PNG explizit sRGB getaggt (Profil: \(profile ?? "fehlt"))", profile?.contains("sRGB") == true)
             } else {
                 check("PNG zurücklesen", false)
             }
@@ -406,6 +559,15 @@ enum ExportSelfTest {
                 let role = mode == .layers ? "Versuch" : "Standard"
                 let sizes = "Seitengröße \(Int(box.width))×\(Int(box.height)) pt = Bereich \(Int(rect.width))×\(Int(rect.height)) pt"
                 check("PDF (\(mode.rawValue), \(role)): 1 Seite, \(sizes)", pages == 1 && sizeOK && r.bytes > 0)
+                // Farbe: Seite per CoreGraphics in eine sRGB-Bitmap rastern und mit den Quellfarben vergleichen. Stimmt
+                // das, liegt eine Entsättigung in einer anderen Rasterung (z. B. sips/Vorschau), nicht im PDF.
+                if let colors = pdfColors(pdfURL, rect: rect, points: [a.center.cgPoint, b.center.cgPoint]), colors.count == 2 {
+                    let okA = closeTo(colors[0], 0x8FA3A0, 8), okB = closeTo(colors[1], 0xC48B7A, 8)
+                    check("PDF (\(mode.rawValue)) in sRGB gerastert: A \(hexString(colors[0])) ≈ #8FA3A0, B \(hexString(colors[1])) ≈ #C48B7A",
+                          okA && okB)
+                } else {
+                    check("PDF (\(mode.rawValue)) rastern", false)
+                }
             } catch {
                 check("PDF-Export \(mode.rawValue) (\(error))", false)
             }
