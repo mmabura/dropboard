@@ -3,7 +3,8 @@ import QuartzCore
 import DropboardCore
 
 /// `--snapshot <pfad.png>`: Board mit den gespeicherten Bildern offscreen rendern (Layer-Baum per
-/// CALayer.render(in:) in einen Bitmap-Kontext in Backing-Scale), dazu das Eselsohr als `<pfad ohne .png>-ear.png`.
+/// CALayer.render(in:) in einen Bitmap-Kontext in Backing-Scale), dazu das Eselsohr als `<pfad ohne .png>-ear.png`
+/// und eine Übersicht aller 4 Ecken auf hellen/dunklen Hintergründen als `<pfad ohne .png>-ear-sheet.png`.
 /// Kein Fenster, keine Systemberechtigung. Dekodiert synchron (es läuft kein Run-Loop).
 /// `--snapshot-demo`: vorher 5 Platzhalterbilder in ein TEMPORÄRES Board schreiben (nie in den echten Ordner),
 /// plus ein offener Platzhalter (Look bis zur Erfüllung eines Promise).
@@ -85,6 +86,10 @@ enum Snapshot {
             let earURL = earSnapshotURL(for: boardURL)
             try renderPNG(earRoot, size: earSize, scale: scale, to: earURL)
             Log.line("[WIN]", "Snapshot Eselsohr geschrieben \(earURL.path) ecke=\(corner.rawValue)")
+            let sheetURL = earSheetURL(for: boardURL)
+            try renderEarSheet(earSize: earSize, scale: scale, noiseTile: PaperArt.loadNoiseTile(), to: sheetURL)
+            Log.line("[WIN]", "Snapshot Eselsohr-Übersicht geschrieben \(sheetURL.path) (Zeilen: weiß, hellgrau, blau, "
+                + "dunkel; Spalten: oben rechts, oben links, unten rechts, unten links)")
             return true
         } catch {
             Log.line("[WIN]", "Snapshot FEHLER: \(error)")
@@ -96,6 +101,44 @@ enum Snapshot {
     static func earSnapshotURL(for url: URL) -> URL {
         let base = url.pathExtension.lowercased() == "png" ? url.deletingPathExtension() : url
         return base.deletingLastPathComponent().appendingPathComponent(base.lastPathComponent + "-ear.png")
+    }
+
+    /// `/x/board.png` → `/x/board-ear-sheet.png`
+    static func earSheetURL(for url: URL) -> URL {
+        let base = url.pathExtension.lowercased() == "png" ? url.deletingPathExtension() : url
+        return base.deletingLastPathComponent().appendingPathComponent(base.lastPathComponent + "-ear-sheet.png")
+    }
+
+    /// Sichtprüfung Eselsohr (Fix C): alle 4 Ecken in 1:1 auf vier typischen Hintergründen (weiß, hellgrau,
+    /// Desktop-Blau, dunkel), je Zelle 2 × Eselsohr-Größe, Eselsohr mittig mit `earOpacity` (wie im Panel).
+    static func renderEarSheet(earSize: CGSize, scale: CGFloat, noiseTile: CGImage?, to url: URL) throws {
+        let backgrounds: [UInt32] = [0xFFFFFF, 0xDCDCDC, 0x5E7388, 0x1C1C1E]
+        let corners: [EarCorner] = [.topRight, .topLeft, .bottomRight, .bottomLeft]
+        let cell = CGSize(width: earSize.width * 2 * scale, height: earSize.height * 2 * scale)   // Pixel
+        let pw = Int(cell.width) * corners.count, ph = Int(cell.height) * backgrounds.count
+        guard pw > 0, ph > 0, let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { throw CocoaError(.fileWriteUnknown) }
+        let earPx = CGSize(width: earSize.width * scale, height: earSize.height * scale)
+        for (row, hex) in backgrounds.enumerated() {
+            let y = CGFloat(backgrounds.count - 1 - row) * cell.height   // Zeile 0 oben
+            ctx.setFillColor(PaperStyle.cgColor(hex))
+            ctx.fill(CGRect(x: 0, y: y, width: CGFloat(pw), height: cell.height))
+            for (col, corner) in corners.enumerated() {
+                guard let ear = PaperArt.earImage(size: earSize, scale: scale, noiseTile: noiseTile, corner: corner)
+                else { continue }
+                let x = CGFloat(col) * cell.width
+                ctx.saveGState()
+                ctx.setAlpha(CGFloat(PaperStyle.earOpacity))
+                ctx.draw(ear, in: CGRect(x: x + (cell.width - earPx.width) / 2, y: y + (cell.height - earPx.height) / 2,
+                                         width: earPx.width, height: earPx.height))
+                ctx.restoreGState()
+            }
+        }
+        guard let image = ctx.makeImage() else { throw CocoaError(.fileWriteUnknown) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try PaperArt.writePNG(image, to: url)
     }
 
     // ⚠️ VERIFIZIEREN: CALayer.render(in:) kommt in keinem Spike vor. Laut Doku rendert es keine Masken und keine

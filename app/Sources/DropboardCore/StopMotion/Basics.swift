@@ -1,4 +1,5 @@
-// Unverändert übernommen aus spikes/stopmotion/Sources/StopMotionCore/Basics.swift (auf dem Mac mini kompiliert, Selftest 55/55).
+// Übernommen aus spikes/stopmotion/Sources/StopMotionCore/Basics.swift (auf dem Mac mini kompiliert, Selftest 55/55).
+// Phase 4 (Fix C): Pose.shadow (B6), Jitter in Device-Pixeln statt pt (B7).
 import Foundation
 #if canImport(CoreGraphics)
 import CoreGraphics
@@ -41,17 +42,21 @@ public extension RandomNumberGenerator {
 }
 
 /// Zustand eines Objekts in einem Frame. Rotation in Grad.
+/// `shadow`: Anteil des harten Schattens (0 = kein Schatten, 1 = voller Schatten laut PaperStyle). Nur der Drop
+/// nutzt Werte ≠ 1 (Frame 0 ohne Schatten, Briefing „final mit Schatten und Kipp“, B6).
 public struct Pose: Equatable {
     public var position: CGPoint
     public var rotation: Double
     public var scale: Double
     public var opacity: Double
+    public var shadow: Double
 
-    public init(position: CGPoint, rotation: Double = 0, scale: Double = 1, opacity: Double = 1) {
+    public init(position: CGPoint, rotation: Double = 0, scale: Double = 1, opacity: Double = 1, shadow: Double = 1) {
         self.position = position
         self.rotation = rotation
         self.scale = scale
         self.opacity = opacity
+        self.shadow = shadow
     }
 }
 
@@ -63,11 +68,12 @@ public struct JitterSample: Equatable {
 }
 
 public enum StopMotionJitter {
-    public static let minOffset = 0.5      // pt
-    public static let maxOffset = 1.0      // pt
+    /// Briefing „0,5–1 px Positions-Jitter“: Device-Pixel, NICHT pt (B7). Bei 2x sind das 0,25–0,5 pt.
+    public static let minOffset = 0.5      // Device-Pixel
+    public static let maxOffset = 1.0      // Device-Pixel
     public static let maxRotation = 0.3    // Grad, ±
 
-    /// Zufallsrichtung, Betrag in [minOffset, maxOffset], Rotation in ±maxRotation. Vor dem Runden.
+    /// Zufallsrichtung, Betrag in [minOffset, maxOffset] Device-Pixel, Rotation in ±maxRotation. Vor dem Runden.
     /// Zieht immer genau drei Zufallswerte.
     public static func sample<G: RandomNumberGenerator>(using rng: inout G) -> JitterSample {
         let angle = rng.nextUnit() * 2.0 * Double.pi
@@ -76,15 +82,19 @@ public enum StopMotionJitter {
         return JitterSample(dx: cos(angle) * magnitude, dy: sin(angle) * magnitude, rotation: rotation)
     }
 
-    /// Rundet den Versatz auf ganze Device-Pixel (1/backingScale pt). Wären beide Achsen danach 0
-    /// (z. B. 0,35 pt bei 1x), bekommt die größere Achse ein volles Pixel, damit der Frame sichtbar zittert.
+    /// Rundet den Versatz (Eingabe in Device-Pixeln) auf ganze Device-Pixel und gibt ihn in pt zurück
+    /// (1 px = 1/backingScale pt). Ergebnis: genau 1 Device-Pixel auf genau einer Achse – nie 0 (sonst wirkt der
+    /// Frame wie Lag), nie diagonal (√2 px läge über der Obergrenze 1 px). Die größere Achse gewinnt.
     public static func snapped(_ s: JitterSample, backingScale: Double) -> JitterSample {
         let k = max(1.0, backingScale)
-        var dx = (s.dx * k).rounded() / k
-        var dy = (s.dy * k).rounded() / k
-        if dx == 0 && dy == 0 {
-            if abs(s.dx) >= abs(s.dy) { dx = (s.dx < 0 ? -1.0 : 1.0) / k } else { dy = (s.dy < 0 ? -1.0 : 1.0) / k }
+        var px = s.dx.rounded()
+        var py = s.dy.rounded()
+        if px != 0 && py != 0 {
+            if abs(s.dx) >= abs(s.dy) { py = 0 } else { px = 0 }
         }
-        return JitterSample(dx: dx, dy: dy, rotation: s.rotation)
+        if px == 0 && py == 0 {
+            if abs(s.dx) >= abs(s.dy) { px = s.dx < 0 ? -1.0 : 1.0 } else { py = s.dy < 0 ? -1.0 : 1.0 }
+        }
+        return JitterSample(dx: px / k, dy: py / k, rotation: s.rotation)
     }
 }

@@ -3,7 +3,8 @@ import ImageIO
 import DropboardCore
 
 /// Vorgerenderte Bitmaps: Noise-Kachel, gekachelte Noise, Eselsohr, Demo-Platzhalterbilder.
-/// Alles wird einmal erzeugt und als `contents` statischer Layer gesetzt (kein Zeichnen zur Laufzeit).
+/// Alles wird einmal erzeugt (bzw. bei Größen-/Backing-Scale-Wechsel neu) und als `contents` statischer Layer gesetzt
+/// (kein Zeichnen zur Laufzeit).
 enum PaperArt {
     /// PNG-Kachel aus dem Bundle (aus Spike board-paper).
     static func loadNoiseTile() -> CGImage? {
@@ -24,16 +25,45 @@ enum PaperArt {
         return ctx.makeImage()
     }
 
-    /// Eselsohr als umgeknicktes Papiereck: sichtbar ist die Lasche (Dreieck mit rechtem Winkel unten links,
-    /// Falz von oben links nach unten rechts), das Dreieck oben rechts ist „weg“ (transparent).
-    /// Gezeichnet wird immer für `.topRight`; für die anderen Ecken wird der Kontext gespiegelt (links: x, unten: y),
-    /// damit die weggeknickte Ecke zur Bildschirmecke und der rechte Winkel der Lasche zur Bildschirmmitte zeigt.
-    /// Die Lasche zeigt die Papier-Rückseite (etwas dunkler und kühler als das Board), mit derselben Noise, Falzband,
-    /// Falzlinie und hellem Haarstrich; kein Schatten.
+    /// Geometrie des Eselsohrs in Pixeln, immer für `.topRight` (Bitmap-Kontext, y nach oben). Rein, für den Selftest.
+    ///   front – Vorderseite: Quadrat ohne die weggeknickte Ecke oben rechts (Fünfeck)
+    ///   flap  – Lasche: Spiegelbild der weggeknickten Ecke an der Falzlinie, liegt auf der Vorderseite;
+    ///           der rechte Winkel zeigt zur Mitte des Stücks (bzw. des Bildschirms)
+    ///   fold  – Falzlinie von der Oberkante zur rechten Kante
+    struct EarShape {
+        let front: [CGPoint]
+        let flap: [CGPoint]
+        let fold: (CGPoint, CGPoint)
+        /// Außenkanten der Vorderseite ohne Falz (offener Pfad, im Uhrzeigersinn ab Falz-Oberkante)
+        let outerEdges: [CGPoint]
+        /// Die beiden freien Kanten der Lasche (offener Pfad)
+        let flapFreeEdges: [CGPoint]
+    }
+
+    static func earGeometry(pixelWidth W: CGFloat, pixelHeight H: CGFloat,
+                            foldFraction: CGFloat = PaperStyle.earFoldFraction) -> EarShape {
+        let fw = (W * foldFraction).rounded(), fh = (H * foldFraction).rounded()
+        let foldTop = CGPoint(x: W - fw, y: H), foldRight = CGPoint(x: W, y: H - fh)
+        let flapCorner = CGPoint(x: W - fw, y: H - fh)   // Spiegelbild von (W, H) an der Falzlinie
+        return EarShape(
+            front: [CGPoint(x: 0, y: 0), CGPoint(x: W, y: 0), foldRight, foldTop, CGPoint(x: 0, y: H)],
+            flap: [foldTop, foldRight, flapCorner],
+            fold: (foldTop, foldRight),
+            outerEdges: [foldTop, CGPoint(x: 0, y: H), CGPoint(x: 0, y: 0), CGPoint(x: W, y: 0), foldRight],
+            flapFreeEdges: [foldTop, flapCorner, foldRight])
+    }
+
+    /// Eselsohr (Fix C): ein kleines Stück Papier, dessen äußere Ecke diagonal umgeknickt ist.
+    /// Vorderseite = Board-Papier (paperHex + dieselbe Noise-Kachel, 1:1 in Device-Pixeln), Lasche = Rückseite
+    /// (earBackHex, minimal dunkler/kühler) mit derselben Noise; der weggeknickte Eckbereich ist transparent.
+    /// Linien je 1 Device-Pixel: Haarlinie innen an den Außenkanten (Lesbarkeit auf hellem Hintergrund), Haarlinie an den
+    /// freien Laschenkanten, Falzlinie. Kein Schatten, kein Verlauf.
+    /// Gezeichnet wird für `.topRight`; für die anderen Ecken wird der Kontext gespiegelt (links: x, unten: y), damit die
+    /// weggeknickte Ecke zur Bildschirmecke und der rechte Winkel der Lasche zur Bildschirmmitte zeigt.
+    /// Rastervorschau derselben Geometrie vorab in Python geprüft (helle/graue/blaue/dunkle Hintergründe).
     // ⚠️ VERIFIZIEREN: CGMutablePath, clip(), strokePath() und setAlpha() kommen in keinem Spike vor
-    // (Standard-CoreGraphics). Prüfen per `--snapshot`: Datei `<pfad>-ear.png`.
-    // ⚠️ VERIFIZIEREN: Falzband und heller Haarstrich (Clip + Strokes, Offset um 1 pt) sind rein rechnerisch ausgelegt,
-    // Wirkung auf dem Mac im Snapshot prüfen (ob die Lasche als Rückseite einer Papierecke liest).
+    // (Standard-CoreGraphics). Prüfen per `--snapshot`: Datei `<pfad>-ear.png` (Ecke oben rechts transparent, Lasche
+    // als Dreieck mit rechtem Winkel unten links auf der Vorderseite, Falz von Oberkante zur rechten Kante).
     // ⚠️ VERIFIZIEREN: Spiegeln per translateBy/scaleBy(-1) vor dem Zeichnen (auch die gekachelte Noise wird
     // gespiegelt – unkritisch). Prüfen: `--snapshot` mit gesetzter Ecke (`defaults write … dropboard.corner bottomLeft`).
     static func earImage(size: CGSize, scale: CGFloat, noiseTile: CGImage?, corner: EarCorner = .topRight) -> CGImage? {
@@ -43,69 +73,49 @@ enum PaperArt {
                                   space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return nil }
         let W = CGFloat(w), H = CGFloat(h)
+        let g = earGeometry(pixelWidth: W, pixelHeight: H)
 
         // Bitmap-Kontext: y nach oben. Links → horizontal spiegeln, unten → vertikal spiegeln.
         ctx.translateBy(x: corner.isRight ? 0 : W, y: corner.isTop ? 0 : H)
         ctx.scaleBy(x: corner.isRight ? 1 : -1, y: corner.isTop ? 1 : -1)
 
-        let flap = CGMutablePath()
-        flap.move(to: CGPoint(x: 0, y: H))
-        flap.addLine(to: CGPoint(x: W, y: 0))
-        flap.addLine(to: CGPoint(x: 0, y: 0))
-        flap.closeSubpath()
-
-        // Papierfläche mit Noise
-        ctx.saveGState()
-        ctx.addPath(flap)
-        ctx.clip()
-        ctx.setFillColor(PaperStyle.cgColor(PaperStyle.earBackHex))
-        ctx.fill(CGRect(x: 0, y: 0, width: W, height: H))
-        if let tile = noiseTile {
-            ctx.setAlpha(CGFloat(PaperStyle.noiseOpacity))
-            ctx.draw(tile, in: CGRect(x: 0, y: 0, width: tile.width, height: tile.height), byTiling: true)
-            ctx.setAlpha(1)
+        func path(_ pts: [CGPoint], closed: Bool) -> CGPath {
+            let p = CGMutablePath()
+            p.addLines(between: pts)   // ⚠️ VERIFIZIEREN: CGMutablePath.addLines(between:) (Swift-Overlay), nicht aus einem Spike
+            if closed { p.closeSubpath() }
+            return p
         }
-        ctx.restoreGState()
+        let full = CGRect(x: 0, y: 0, width: W, height: H)
 
-        // Haarlinie an den beiden Papierkanten (1 Device-Pixel, auf Pixelmitte)
-        let edges = CGMutablePath()
-        edges.move(to: CGPoint(x: 0.5, y: H))
-        edges.addLine(to: CGPoint(x: 0.5, y: 0.5))
-        edges.addLine(to: CGPoint(x: W, y: 0.5))
-        ctx.addPath(edges)
-        ctx.setStrokeColor(PaperStyle.cgColor(PaperStyle.graphiteHex, alpha: PaperStyle.earEdgeAlpha))
-        ctx.setLineWidth(1)
-        ctx.strokePath()
+        /// Fläche füllen, Noise darüber, dann `edges` als Haarlinie (Strichbreite 2 px, per Clip bleibt 1 px innen).
+        func paperSurface(_ shape: CGPath, fillHex: UInt32, edges: CGPath, edgeAlpha: CGFloat) {
+            ctx.saveGState()
+            ctx.addPath(shape)
+            ctx.clip()
+            ctx.setFillColor(PaperStyle.cgColor(fillHex))
+            ctx.fill(full)
+            if let tile = noiseTile {
+                ctx.setAlpha(CGFloat(PaperStyle.noiseOpacity))
+                ctx.draw(tile, in: CGRect(x: 0, y: 0, width: tile.width, height: tile.height), byTiling: true)
+                ctx.setAlpha(1)
+            }
+            ctx.addPath(edges)
+            ctx.setStrokeColor(PaperStyle.cgColor(PaperStyle.graphiteHex, alpha: edgeAlpha))
+            ctx.setLineWidth(2)
+            ctx.strokePath()
+            ctx.restoreGState()
+        }
 
-        // Falz: Diagonale von oben links nach unten rechts
-        let fold = CGMutablePath()
-        fold.move(to: CGPoint(x: 0, y: H))
-        fold.addLine(to: CGPoint(x: W, y: 0))
-
-        // 1) schmales Band (3 pt) auf der Lasche entlang des Falzes, nur innerhalb der Lasche (Clip), flach, kein Verlauf
-        ctx.saveGState()
-        ctx.addPath(flap)
-        ctx.clip()
-        ctx.addPath(fold)
-        ctx.setStrokeColor(PaperStyle.cgColor(PaperStyle.graphiteHex, alpha: PaperStyle.earFoldBandAlpha))
-        ctx.setLineWidth(6 * scale)   // halbe Breite (3 pt) liegt innerhalb des Clips
-        ctx.strokePath()
-
-        // 2) heller Haarstrich (1 pt) direkt neben der Falzlinie auf der Laschenseite (Normale (-1,-1)/√2, Abstand 1 pt)
-        let off = scale * 0.7071
-        let highlight = CGMutablePath()
-        highlight.move(to: CGPoint(x: -off, y: H - off))
-        highlight.addLine(to: CGPoint(x: W - off, y: -off))
-        ctx.addPath(highlight)
-        ctx.setStrokeColor(PaperStyle.cgColor(0xFFFFFF, alpha: PaperStyle.earFoldHighlightAlpha))
-        ctx.setLineWidth(max(1, scale))
-        ctx.strokePath()
-        ctx.restoreGState()
-
-        // 3) Falzlinie (1 pt)
-        ctx.addPath(fold)
+        // 1) Vorderseite (gleiches Papier wie das Board)
+        paperSurface(path(g.front, closed: true), fillHex: PaperStyle.paperHex,
+                     edges: path(g.outerEdges, closed: false), edgeAlpha: PaperStyle.earEdgeAlpha)
+        // 2) Lasche = Rückseite, liegt auf der Vorderseite
+        paperSurface(path(g.flap, closed: true), fillHex: PaperStyle.earBackHex,
+                     edges: path(g.flapFreeEdges, closed: false), edgeAlpha: PaperStyle.earFlapEdgeAlpha)
+        // 3) Falzlinie (1 Device-Pixel)
+        ctx.addPath(path([g.fold.0, g.fold.1], closed: false))
         ctx.setStrokeColor(PaperStyle.cgColor(PaperStyle.graphiteHex, alpha: PaperStyle.earFoldAlpha))
-        ctx.setLineWidth(max(1, scale))
+        ctx.setLineWidth(1)
         ctx.strokePath()
 
         return ctx.makeImage()

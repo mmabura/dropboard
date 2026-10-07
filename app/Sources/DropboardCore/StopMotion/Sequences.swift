@@ -1,4 +1,5 @@
-// Unverändert übernommen aus spikes/stopmotion/Sources/StopMotionCore/Sequences.swift (auf dem Mac mini kompiliert, Selftest 55/55).
+// Übernommen aus spikes/stopmotion/Sources/StopMotionCore/Sequences.swift (auf dem Mac mini kompiliert, Selftest 55/55).
+// Phase 4 (Fix C): Drop-Frame 0 ohne Schatten (B6).
 import Foundation
 #if canImport(CoreGraphics)
 import CoreGraphics
@@ -14,11 +15,13 @@ public enum StopMotionSequences {
     public static let moveMaxFrames = 4
     public static let deleteScale = 0.92        // Löschen: leicht kleiner, dann weg
 
-    /// Drop: 2 Frames. Frame 0 = groß und ohne Kipp (mit Jitter), Frame 1 = `target` (mit Kipp).
+    /// Drop: 2 Frames. Frame 0 = groß, ohne Kipp und ohne Schatten (mit Jitter), Frame 1 = `target`
+    /// (final mit Schatten und Kipp, Briefing).
     public static func drop<G: RandomNumberGenerator>(target: Pose, options: PlanOptions, using rng: inout G) -> StopMotionPlan {
         var start = target
         start.rotation = 0
         start.scale = target.scale * dropScale
+        start.shadow = 0
         return StopMotionPlanner.plan(SequenceSpec(start: start, end: target, frameCount: 2, options: options), using: &rng)
     }
 

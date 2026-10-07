@@ -26,17 +26,55 @@ enum StopMotionSheet {
             return
         }
         let mask = makeMask(for: content, anchor: anchor)
-        // ⚠️ VERIFIZIEREN: discrete-Keyframes auf einer Maske (bisher nur CABasicAnimation, RealtimeMotion); Jitter dreht
-        // die Maske um ±0,3° um die Ecke – an der fernen Papierkante sind das einige pt (gewollt: Papier zittert).
+        // B7: Der Rotations-Jitter (±0,3°) würde die bildschirmgroße Maske um die Ecke drehen; an der fernen Papierkante
+        // wären das bei 1920×1080 pt ≈ 11 pt. Deshalb anteilig so begrenzt, dass sich der fernste Punkt um höchstens
+        // 1 Device-Pixel bewegt (Positions-Jitter bleibt 1 Device-Pixel).
+        let limited = limitRotation(plan, sheetSize: content.bounds.size, anchor: anchor,
+                                    backingScale: Double(max(1, content.contentsScale)))
+        // ⚠️ VERIFIZIEREN: discrete-Keyframes auf einer Maske (bisher nur CABasicAnimation, RealtimeMotion).
         StopMotion.batch {
             content.mask = mask
-            StopMotion.apply(plan, to: mask)   // Model-Wert = letzter Frame, dann discrete-Keyframes (Report 03)
+            StopMotion.apply(limited, to: mask)   // Model-Wert = letzter Frame, dann discrete-Keyframes (Report 03)
         }
         guard removeMaskAfter else { return }
         afterDelay(plan.duration + 0.05) {
             guard content.mask === mask else { return }   // eine neuere Maske nicht entfernen
             withoutImplicitAnimations { content.mask = nil }
         }
+    }
+
+    /// Größter Abstand vom Drehpunkt (Anker) zu einer Ecke des Blatts, in pt.
+    static func farthestDistance(sheetSize: CGSize, anchor: CGPoint) -> Double {
+        let xs = [0.0, Double(sheetSize.width)], ys = [0.0, Double(sheetSize.height)]
+        var best = 0.0
+        for x in xs {
+            for y in ys {
+                let dx = x - Double(anchor.x), dy = y - Double(anchor.y)
+                best = max(best, (dx * dx + dy * dy).squareRoot())
+            }
+        }
+        return best
+    }
+
+    /// Größte erlaubte Blatt-Rotation (Grad), bei der sich der fernste Punkt um höchstens 1 Device-Pixel bewegt.
+    static func maxSheetRotation(sheetSize: CGSize, anchor: CGPoint, backingScale: Double) -> Double {
+        let r = farthestDistance(sheetSize: sheetSize, anchor: anchor)
+        guard r > 0 else { return StopMotionJitter.maxRotation }
+        let onePixel = 1.0 / max(1.0, backingScale)                 // pt
+        let degrees = 2 * asin(min(1, onePixel / (2 * r))) * 180 / Double.pi   // Sehne = 1 px
+        return min(StopMotionJitter.maxRotation, degrees)
+    }
+
+    /// Plan mit anteilig verkleinerter Rotation: ±maxRotation → ±maxSheetRotation (Vorzeichen und Verhältnis bleiben).
+    static func limitRotation(_ plan: StopMotionPlan, sheetSize: CGSize, anchor: CGPoint, backingScale: Double) -> StopMotionPlan {
+        let limit = maxSheetRotation(sheetSize: sheetSize, anchor: anchor, backingScale: backingScale)
+        let factor = StopMotionJitter.maxRotation > 0 ? limit / StopMotionJitter.maxRotation : 0
+        let frames = plan.frames.map { pose -> Pose in
+            var p = pose
+            p.rotation = min(limit, max(-limit, pose.rotation * factor))
+            return p
+        }
+        return StopMotionPlan(frames: frames, keyTimes: plan.keyTimes, duration: plan.duration)
     }
 
     static func clear(_ content: CALayer) {

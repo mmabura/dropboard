@@ -5,13 +5,16 @@ import DropboardCore
 /// Layer-Baum des Boards, unabhängig von Fenster und View (wird gehostet oder offscreen gerendert).
 /// Reihenfolge von unten (wie Spike board-paper): Papier (sheet), Noise, Abdunklung, Bilder.
 ///   root  – transparent, Hosted-Layer der View
-///   sheet – Papier; Ziel der Realtime-Maske (Aufblättern/Zuklappen)
+///   clip  – Container fürs Realtime-Aufblättern/Zuklappen (masksToBounds + animierte bounds, P5; RealtimeMotion)
+///   sheet – Papier; Ziel der Stop-Motion-Maske im Ansichtsmodus (StopMotionSheet)
 /// Bilder und Platzhalter sind Standalone-CALayer mit hartem Schatten.
 /// Koordinaten: Layer y nach oben; Board-Koordinaten (DropboardCore) y nach unten → `layerPoint`.
 @MainActor
 final class BoardScene {
     let root = CALayer()
     let sheet = CALayer()
+    /// Clip-Container zwischen root und sheet (RealtimeMotion.clipName). Im Ruhezustand ohne Clipping.
+    let clip = CALayer()
     private let noiseLayer = CALayer()
     private let dimLayer = CALayer()
     private let itemContainer = CALayer()
@@ -19,11 +22,17 @@ final class BoardScene {
     private(set) var size: CGSize = .zero
     private(set) var scale: CGFloat = 0
     private var itemLayers: [UUID: CALayer] = [:]
+    /// C19: wird nach einem Wechsel des Backing-Scale aufgerufen (alt, neu). Noise wird hier neu gekachelt; der
+    /// Aufrufer (BoardController) dekodiert damit die Bilder in der neuen Pixelgröße neu. Additiv, Standard nil.
+    var onBackingScaleChange: ((_ old: CGFloat, _ new: CGFloat) -> Void)?
 
     init(size: CGSize, scale: CGFloat, noiseTile: CGImage?) {
         self.noiseTile = noiseTile
         withoutImplicitAnimations {
             root.name = "board.root"
+            clip.name = RealtimeMotion.clipName
+            clip.masksToBounds = false
+            clip.anchorPoint = .zero
             sheet.name = "board.sheet"
             sheet.backgroundColor = PaperStyle.cgColor(PaperStyle.paperHex)  // flach, keine Vignette, kein Verlauf
             noiseLayer.name = "board.noise"
@@ -36,7 +45,8 @@ final class BoardScene {
             sheet.addSublayer(noiseLayer)
             sheet.addSublayer(dimLayer)
             sheet.addSublayer(itemContainer)
-            root.addSublayer(sheet)
+            clip.addSublayer(sheet)
+            root.addSublayer(clip)
         }
         resize(size: size, scale: scale)
         if noiseTile == nil {
@@ -45,25 +55,74 @@ final class BoardScene {
     }
 
     /// Größe/Backing-Scale setzen; die Noise wird nur bei Änderung neu gekachelt (einmal, statisch).
+    /// C5: Item-Layer neu setzen. Ihre Layer-Position ist `layerPoint(center)` = (x, Höhe − y) mit der ALTEN Höhe;
+    /// die Board-Koordinate (Modell, y nach unten) bleibt gleich, also wird jede Position um (neueHöhe − alteHöhe)
+    /// verschoben – das ist exakt `layerPoint(center)` mit der neuen Höhe. Laufende Stop-Motion-Keyframes (absolute
+    /// Werte in alten Koordinaten) werden beendet, der Layer zeigt den (verschobenen) Endzustand.
+    /// C19: Bei geändertem Backing-Scale wird die Noise in der neuen Pixelgröße gekachelt (hier) und
+    /// `onBackingScaleChange` gemeldet (Bilder neu dekodieren); das Eselsohr zeichnet BoardPresenter.updateEarArt neu.
     func resize(size newSize: CGSize, scale newScale: CGFloat) {
-        let changed = newSize != size || newScale != scale
+        let oldSize = size, oldScale = scale
+        let changed = newSize != oldSize || newScale != oldScale
         size = newSize
         scale = newScale
         let bounds = CGRect(origin: .zero, size: newSize)
+        let dy = oldSize == .zero ? 0 : newSize.height - oldSize.height
         withoutImplicitAnimations {
             // ⚠️ VERIFIZIEREN (aus Spike board-paper): bei Layer-Hosting setzt AppKit den Root-Frame nicht selbst.
             root.frame = bounds
+            // Clip-Container: Ruhezustand (anchorPoint 0, position 0, bounds = Blatt) → Koordinaten wie root.
+            clip.removeAllAnimations()
+            clip.masksToBounds = false
+            clip.anchorPoint = .zero
+            clip.position = .zero
+            clip.bounds = bounds
             sheet.frame = bounds
             noiseLayer.frame = bounds
             dimLayer.frame = bounds
             itemContainer.frame = bounds
-            for layer in [root, sheet, noiseLayer, dimLayer, itemContainer] { layer.contentsScale = newScale }
-            for layer in itemLayers.values { layer.contentsScale = newScale }
+            for layer in [root, clip, sheet, noiseLayer, dimLayer, itemContainer] { layer.contentsScale = newScale }
+            for layer in itemLayers.values {
+                layer.contentsScale = newScale
+                if dy != 0 {
+                    for key in layer.animationKeys() ?? [] where key.hasPrefix(StopMotion.keyPrefix) {
+                        layer.removeAnimation(forKey: key)
+                    }
+                    layer.position = CGPoint(x: layer.position.x, y: layer.position.y + dy)
+                }
+            }
             if changed, let tile = noiseTile {
                 noiseLayer.contents = PaperArt.tiledNoise(tile: tile, pixelSize: CGSize(width: newSize.width * newScale,
                                                                                        height: newSize.height * newScale))
             }
         }
+        if oldScale != 0 && newScale != oldScale {
+            Log.line("[WIN]", "Backing-Scale \(oldScale) → \(newScale): Noise neu gekachelt, Bilder neu dekodieren "
+                + "(\(onBackingScaleChange == nil ? "kein Empfänger" : "gemeldet"))")
+            onBackingScaleChange?(oldScale, newScale)
+        }
+    }
+
+    /// Item-Layer aus dem Modell neu setzen (Board-Koordinaten, y nach unten). Additiv für Aufrufer, die das Dokument
+    /// kennen (z. B. nach `resize`); `resize` selbst verschiebt schon um die Höhendifferenz.
+    func relayoutItems(_ poses: [UUID: (center: CGPoint, rotation: Double)]) {
+        StopMotion.batch {
+            for (id, p) in poses {
+                guard let layer = itemLayers[id] else { continue }
+                for key in layer.animationKeys() ?? [] where key.hasPrefix(StopMotion.keyPrefix) {
+                    layer.removeAnimation(forKey: key)
+                }
+                StopMotion.setModel(pose(center: p.center, rotation: p.rotation), on: layer)
+            }
+        }
+    }
+
+    /// Pixelgröße der aktuell gekachelten Noise (Selftest C19).
+    var noisePixelSize: CGSize? {
+        guard let contents = noiseLayer.contents,
+              CFGetTypeID(contents as CFTypeRef) == CGImage.typeID else { return nil }
+        let image = contents as! CGImage   // Typ oben geprüft
+        return CGSize(width: image.width, height: image.height)
     }
 
     // MARK: Abdunklung (während eines Drags)

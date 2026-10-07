@@ -30,6 +30,7 @@ enum SelfTest {
         ViewModeSelfTest.run(t)
         SettingsSelfTest.run(t)
         FixBSelfTest.run(t)
+        FixCSelfTest.run(t)
         print("\(t.total - t.failures)/\(t.total) PASS" + (t.failures == 0 ? "" : ", \(t.failures) FAIL"))
         fflush(stdout)
         return t.failures == 0

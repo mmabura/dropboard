@@ -16,20 +16,26 @@ enum PaperStyle {
 
     // Harter Schatten (kein Blur)
     static let shadowRadius: CGFloat = 0
-    static let shadowOffset = CGSize(width: 1.5, height: -1.5)  // pt; nach unten rechts (y-up, nicht geflippt)
-    static let shadowOpacity: Float = 0.45        // v1: 0.25; auf Board ca. #9D968C statt #BEBBB5 (Kontrast 2.5:1 statt 1.6:1)
+    // Fix C: Versatz an der Briefing-Obergrenze (2 pt = 4 Device-px @2x). Deckkraft so, dass der Schatten dunkler ist als
+    // jedes gedämpfte Bild und klar vom Papier absetzt (WCAG-Kontrast nach relativer Luminanz, Papier inkl. Noise #EEEAE3):
+    //   0.45 → #9D968C, 2.46:1 zum Papier, 1.02–1.24:1 zu den Demo-Bildern (verschmolz mit der Bildkante, las als „Kante“)
+    //   0.65 → #797065, 4.07:1 zum Papier (≥ 3:1), 1.37–2.05:1 zu den Demo-Bildern; abgedunkelt #63594E auf #AFA89F 2.93:1
+    static let shadowOffset = CGSize(width: 2, height: -2)  // pt; nach unten rechts (y-up, nicht geflippt); v2: 1.5
+    static let shadowOpacity: Float = 0.65        // v2: 0.45, v1: 0.25
 
     // Platzhalter bis ein File-Promise erfüllt ist: leeres Papier-Rechteck, etwas heller als das Board
     static let placeholderHex: UInt32 = 0xFBF9F4
 
-    // Eselsohr: umgeknickte Ecke. Die Lasche zeigt die Papier-Rückseite (etwas dunkler und kühler als die Vorderseite),
-    // gedämpft, ohne Schatten im Ruhezustand. Nach Noise ca. #E0DED8 (Board: #EEEAE3).
-    static let earBackHex: UInt32 = 0xE5E3DD    // v1: 0xE9E3D7 (wärmer, wirkte wie flaches Dreieck)
+    // Eselsohr (Fix C): kleines Stück Papier, Vorderseite = Board-Papier (paperHex + gleiche Noise), dessen äußere Ecke
+    // (zur Bildschirmecke) diagonal umgeknickt ist. Die Lasche zeigt die Rückseite (minimal dunkler und kühler) und liegt
+    // auf der Vorderseite; der weggeknickte Eckbereich ist transparent. Gedämpft, ohne Schatten (Briefing).
+    // Nach Noise: Vorderseite ca. #EEEAE3, Lasche ca. #DFDDD7.
+    static let earBackHex: UInt32 = 0xE4E2DB    // v2: 0xE5E3DD (nur Lasche gezeichnet), v1: 0xE9E3D7
     static let earOpacity: Float = 0.9
-    static let earEdgeAlpha: CGFloat = 0.18     // schmaler harter Kantenstrich an den beiden Papierkanten (Lesbarkeit auf Hell); v1: 0.14
-    static let earFoldAlpha: CGFloat = 0.24     // Falzlinie (Diagonale); v1: 0.28
-    static let earFoldBandAlpha: CGFloat = 0.07 // schmale Abdunklung der Lasche entlang des Falzes (Papierwölbung), flach, 3 pt
-    static let earFoldHighlightAlpha: CGFloat = 0.45 // heller Haarstrich direkt neben der Falzlinie (Falzkante)
+    static let earFoldFraction: CGFloat = 0.5   // Schenkellänge der Lasche relativ zur Kantenlänge (40 pt → 20 pt)
+    static let earEdgeAlpha: CGFloat = 0.16     // Haarlinie (1 Device-px, innen) an den Außenkanten der Vorderseite
+    static let earFlapEdgeAlpha: CGFloat = 0.20 // Haarlinie (1 Device-px, innen) an den beiden freien Laschenkanten
+    static let earFoldAlpha: CGFloat = 0.34     // Falzlinie (1 Device-px, Diagonale)
 
     static func cgColor(_ hex: UInt32, alpha: CGFloat = 1) -> CGColor {
         CGColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,

@@ -1,4 +1,5 @@
-// Unverändert übernommen aus spikes/stopmotion/Sources/StopMotionCore/Planner.swift (auf dem Mac mini kompiliert, Selftest 55/55).
+// Übernommen aus spikes/stopmotion/Sources/StopMotionCore/Planner.swift (auf dem Mac mini kompiliert, Selftest 55/55).
+// Phase 4 (Fix C): lerp interpoliert auch Pose.shadow (B6).
 import Foundation
 #if canImport(CoreGraphics)
 import CoreGraphics
@@ -104,6 +105,7 @@ public enum StopMotionPlanner {
                                y: a.position.y + (b.position.y - a.position.y) * CGFloat(t)),
              rotation: a.rotation + (b.rotation - a.rotation) * t,
              scale: a.scale + (b.scale - a.scale) * t,
-             opacity: a.opacity + (b.opacity - a.opacity) * t)
+             opacity: a.opacity + (b.opacity - a.opacity) * t,
+             shadow: a.shadow + (b.shadow - a.shadow) * t)
     }
 }
