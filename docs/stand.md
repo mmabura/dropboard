@@ -1,7 +1,12 @@
 # Stand Dropboard – 7. Okt. 2026
 
-**Version 0.1.24** (Commit `ebf8359`), veröffentlicht in
-`Dropbox/_PROJECTS/CLAUDE CODE/Dropboard/` (`Dropboard-latest.dmg`, `.zip`, `versions/v0.1.24/`).
+**Version 0.1.32** (Commit `4c9eef5`), veröffentlicht in
+`Dropbox/_PROJECTS/CLAUDE CODE/Dropboard/` (`Dropboard-latest.dmg`, `.zip`, `versions/v0.1.32/`).
+
+**Neu seit 0.1.24:** Beschnitt per Doppelklick im Ansichtsmodus (E11) und Export der Zeichenfläche mit DPI (E12):
+PNG mit DPI-Angabe, PDF, Originale als Ordner, 72/150/300/600 dpi, Menüleiste und ⌘E. Nachweis auf dem Mac mini:
+`swift build` 0/0, `--selftest` 505/505. Exporte bei 72/300/600 dpi haben exakte Pixelmaße und DPI-Angaben, die PDF-Seitengröße
+stimmt in pt, sRGB ist getaggt. Der harte Schatten bleibt bei jeder DPI 2 pt (gemessen bei 72 dpi 2,00 px, bei 300 dpi 7,98 px).
 
 ## Was fertig ist
 
@@ -66,4 +71,6 @@ Logdatei: `~/Library/Logs/Dropboard/dropboard.log`. Vollständige Testliste mit 
 
 Export (PNG/PDF/Ordner), mehrere Boards mit Tab-Leiste, weitere Quellen (Text, Farben, Resolve-Frames),
 Overlay-Deckkraft und Einrückung als Einstellung, Eselsohr pro Bildschirm, Hotkey frei belegbar.
-Kleinkram: Selftests schreiben einzelne Zeilen ins echte `dropboard.log`; P11/P13.
+Kleinkram: Selftests schreiben einzelne Zeilen ins echte `dropboard.log`; P11/P13; das Logfeld `platzhalter=` erscheint
+im CLI-Export nicht (dort gibt es keine offenen Promises); Bestätigung zu E12 offen: ⌘E schließt den Ansichtsmodus,
+PDF als Bitmap-Seite (Vektor-Variante `--pdf-layers` ist ebenfalls korrekt), Export über ~3 GB Speicher wird abgelehnt.

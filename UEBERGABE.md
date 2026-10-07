@@ -41,12 +41,12 @@ Logdatei: `~/Library/Logs/Dropboard/dropboard.log`
 
 ## In Arbeit beim Packen dieses Archivs
 
-1. **Beschnitt per Doppelklick (E11).** Ein Agent hat begonnen, die Arbeit ist noch **nicht committet** und daher **nicht in diesem Archiv**. Die Spezifikation steht vollständig in `docs/entscheidungen.md` E11. Fehlt sie beim Weiterarbeiten auf dem Branch, neu umsetzen:
+1. **Beschnitt per Doppelklick (E11).** Inzwischen fertig, ab Commit `903a3a0` (Version 0.1.30). Ein älteres Archiv enthält ihn nicht, `git pull` holt ihn. Die Spezifikation steht vollständig in `docs/entscheidungen.md` E11. Fehlt sie beim Weiterarbeiten auf dem Branch, neu umsetzen:
    - Modell `BoardItem.crop`, normiert und abwärtskompatibel.
    - Darstellung über `contentsRect`.
    - Beschnittmodus im Ansichtsmodus per Doppelklick, mit Griffen, Pan, ⇧, Return/Esc/R.
    - Selftests.
-2. **Export mit DPI (E12).** Noch nicht begonnen. Die Spezifikation steht in E12:
+2. **Export mit DPI (E12).** Inzwischen fertig, ab Commit `4c9eef5` (Version 0.1.32). Ursprünglich geplant war: Die Spezifikation steht in E12:
    - Menüleiste bzw. ⌘E, kein Dialog.
    - PNG/PDF/Originale-Ordner, 72/150/300/600 dpi.
    - Aus Originalen dekodieren, maximal 16 384 px.
