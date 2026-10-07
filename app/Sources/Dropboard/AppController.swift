@@ -25,6 +25,10 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
     private var presenter: BoardPresenter?
     private var coordinator: DragCoordinator?
     private var diagnostics: Diagnostics?
+    /// E12: Export (Menüleiste, ⌘E im Ansichtsmodus).
+    private var exporter: ExportController?
+    /// Ordner-Dialog offen: die eigene Aktivierung ist erwartet (vom Nutzer ausgelöst), kein Befund.
+    private var expectingActivation = false
 
     init(options: LaunchOptions) {
         self.options = options
@@ -98,6 +102,17 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
         let coordinator = DragCoordinator(presenter: presenter, board: board, importer: importer,
                                           motion: motion, diagnostics: diagnostics, settings: settings)
         presenter.attach(coordinator)
+        let exporter = ExportController(settings: settings, board: board)
+        exporter.onExpectedActivation = { [weak self] expected in
+            self?.expectingActivation = expected
+        }
+        exporter.onStateChange = { [weak self] in
+            self?.statusMenu?.refresh()
+        }
+        coordinator.setExportHandler { [weak self] in
+            self?.exportFromShortcut()
+        }
+        self.exporter = exporter
         self.scene = scene
         self.presenter = presenter
         self.boardController = board
@@ -142,8 +157,13 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
     @objc private func appActivated(_ note: Notification) {
         let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         let own = app?.processIdentifier == ProcessInfo.processInfo.processIdentifier
-        Log.line("[FOCUS]", "App aktiviert: \(app?.bundleIdentifier ?? "nil") (\(app?.localizedName ?? "?"))"
-            + (own ? " !!! DROPBOARD SELBST AKTIVIERT" : ""))
+        let note: String
+        if own {
+            note = expectingActivation ? " (erwartet: Ordner-Dialog Exportordner, vom Nutzer ausgelöst)" : " !!! DROPBOARD SELBST AKTIVIERT"
+        } else {
+            note = ""
+        }
+        Log.line("[FOCUS]", "App aktiviert: \(app?.bundleIdentifier ?? "nil") (\(app?.localizedName ?? "?"))" + note)
     }
 
     /// Auflösung/Monitore geändert: ALLE Phasen sauber beenden (C4), Eselsohr auf dem Hauptbildschirm neu
@@ -185,6 +205,7 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
         Log.line("[SETTINGS]", "Start \(settings.summary) version=\(StatusMenuController.versionText) "
             + "anmeldung=\(loginText) ear=\(fmt(presenter?.earFrame ?? .zero))")
         Log.line("[SETTINGS]", "Menüleisten-Symbol angelegt \(statusMenu?.diagnosticsText ?? "fehlt")")
+        Log.line("[EXPORT]", "Start \(settings.exportSummary) (Menü „Board exportieren“, ⌘E im Ansichtsmodus)")
 
         let hotKey = GlobalHotKey(id: 1) { [weak self] in
             self?.toggleEarHidden(source: "Hotkey \(HideHotKey.display)")
@@ -246,6 +267,38 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
     func revealLogFile() {
         Log.line("[SETTINGS]", "Protokoll im Finder zeigen \(Log.filePath)")
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: Log.filePath)])
+    }
+
+    // MARK: Export (E12)
+
+    var canExportBoard: Bool { exporter?.canExport ?? false }
+    var isExportRunning: Bool { exporter?.isRunning ?? false }
+
+    func exportBoard(format: ExportFormat) {
+        guard let exporter = exporter else { return }
+        settings.exportFormat = format   // zuletzt gewähltes Format (⌘E)
+        exporter.export(format: format, reason: "Menüleiste")
+    }
+
+    func chooseExportFolder() {
+        exporter?.chooseFolder()
+    }
+
+    func useDesktopExportFolder() {
+        exporter?.useDesktop()
+    }
+
+    /// ⌘E im Ansichtsmodus: Export im zuletzt gewählten Format. Der Ansichtsmodus schließt dabei (Stop-Motion wie Esc),
+    /// sonst läge das Board über dem Finder-Fenster, das die Datei zeigt. Leeres Board: nur Hinweis, Board bleibt offen.
+    private func exportFromShortcut() {
+        guard let exporter = exporter else { return }
+        let format = settings.exportFormat
+        guard exporter.hasItems else {
+            Log.line("[EXPORT]", "⌘E: Board ist leer → nichts exportiert")
+            return
+        }
+        coordinator?.closeViewing(reason: "Export ⌘E")
+        exporter.export(format: format, reason: "⌘E im Ansichtsmodus")
     }
 
     func quitFromMenu() {

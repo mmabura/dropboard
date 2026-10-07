@@ -1,4 +1,5 @@
 import Foundation
+import DropboardCore
 
 /// Startargumente:
 ///   --handoff two-panels|grow   Übergabe-Variante (Default: DropboardConfig.defaultHandoff)
@@ -10,6 +11,12 @@ import Foundation
 ///   --snapshot <pfad.png>       Board + Eselsohr offscreen als PNG, dann beenden
 ///   --snapshot-demo             mit --snapshot: 5 Platzhalterbilder in einem temporären Board
 ///   --snapshot-dimmed           mit --snapshot: abgedunkeltes Papier (Look während des Drags)
+///   --export <pfad>             Board ohne Fenster exportieren (E12), dann beenden. Ordner → automatischer Name darin
+///   --format png|pdf|folder     mit --export: Format (sonst aus der Endung, sonst PNG)
+///   --dpi <n>                   mit --export: DPI (Standard 300; 1…2400, Menü nur 72/150/300/600)
+///   --area content|full         mit --export: nur Inhalt (Standard) oder ganze Fläche
+///   --pdf-layers                mit --export und PDF: Layer direkt in den PDF-Kontext (Versuch, ⚠️ VERIFIZIEREN)
+///   --snapshot-demo             auch mit --export: temporäres Demo-Board
 struct LaunchOptions {
     var handoff: HandoffMode = DropboardConfig.defaultHandoff
     var boardDirectory: URL?
@@ -19,6 +26,14 @@ struct LaunchOptions {
     var snapshotDemo = false
     var snapshotDimmed = false
     var diagPasteboard = false
+    var exportPath: String?
+    var exportFormat: ExportFormat?
+    var exportDPI: Int?
+    var exportArea: ExportArea?
+    var pdfLayers = false
+
+    /// Erlaubte DPI im CLI (Selftest/Prüfung auch krumme Werte wie 144).
+    static let cliDPIRange = 1...2400
 
     static let diagPasteboardFlag = "--diag-pasteboard"
     /// Direkt aus den Prozess-Argumenten (ImageImporter liest das ohne Umweg über AppController).
@@ -29,7 +44,8 @@ struct LaunchOptions {
     }
 
     static let usage = "Dropboard [--handoff two-panels|grow] [--board-dir <pfad>] [--reduce-motion] [--diag-pasteboard] "
-        + "| --selftest | --snapshot <pfad.png> [--snapshot-demo] [--snapshot-dimmed] [--board-dir <pfad>]"
+        + "| --selftest | --snapshot <pfad.png> [--snapshot-demo] [--snapshot-dimmed] [--board-dir <pfad>] "
+        + "| --export <pfad> [--format png|pdf|folder] [--dpi N] [--area content|full] [--pdf-layers] [--snapshot-demo] [--board-dir <pfad>]"
 
     static func parse(_ args: [String]) throws -> LaunchOptions {
         var o = LaunchOptions()
@@ -49,6 +65,31 @@ struct LaunchOptions {
                 o.forceReduceMotion = true
             case diagPasteboardFlag:
                 o.diagPasteboard = true
+            case "--pdf-layers":
+                o.pdfLayers = true
+            case "--export", "--format", "--dpi", "--area":
+                guard i + 1 < args.count else { throw ParseError(message: "\(a) braucht einen Wert") }
+                let value = args[i + 1]
+                i += 1
+                switch a {
+                case "--export":
+                    o.exportPath = (value as NSString).expandingTildeInPath
+                case "--format":
+                    guard let f = ExportFormat(rawValue: value.lowercased()) else {
+                        throw ParseError(message: "Ungültiger Wert für --format: \(value) (erlaubt: png, pdf, folder)")
+                    }
+                    o.exportFormat = f
+                case "--dpi":
+                    guard let dpi = Int(value), cliDPIRange.contains(dpi) else {
+                        throw ParseError(message: "Ungültiger Wert für --dpi: \(value) (erlaubt: \(cliDPIRange.lowerBound)…\(cliDPIRange.upperBound))")
+                    }
+                    o.exportDPI = dpi
+                default:
+                    guard let area = ExportArea(rawValue: value.lowercased()) else {
+                        throw ParseError(message: "Ungültiger Wert für --area: \(value) (erlaubt: content, full)")
+                    }
+                    o.exportArea = area
+                }
             case "--handoff", "--snapshot", "--board-dir":
                 guard i + 1 < args.count else { throw ParseError(message: "\(a) braucht einen Wert") }
                 let value = args[i + 1]
@@ -69,8 +110,17 @@ struct LaunchOptions {
             }
             i += 1
         }
-        if (o.snapshotDemo || o.snapshotDimmed) && o.snapshotPath == nil {
-            throw ParseError(message: "--snapshot-demo/--snapshot-dimmed nur zusammen mit --snapshot <pfad.png>")
+        if o.snapshotDimmed && o.snapshotPath == nil {
+            throw ParseError(message: "--snapshot-dimmed nur zusammen mit --snapshot <pfad.png>")
+        }
+        if o.snapshotDemo && o.snapshotPath == nil && o.exportPath == nil {
+            throw ParseError(message: "--snapshot-demo nur zusammen mit --snapshot <pfad.png> oder --export <pfad>")
+        }
+        if o.snapshotPath != nil && o.exportPath != nil {
+            throw ParseError(message: "--snapshot und --export nicht zusammen")
+        }
+        if o.exportPath == nil && (o.exportFormat != nil || o.exportDPI != nil || o.exportArea != nil || o.pdfLayers) {
+            throw ParseError(message: "--format/--dpi/--area/--pdf-layers nur zusammen mit --export <pfad>")
         }
         return o
     }

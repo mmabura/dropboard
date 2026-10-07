@@ -57,11 +57,14 @@ enum ImageDecoder {
     /// dekodiert wird trotzdem das ganze Bild, und zwar in voller Größe F × Scale (CropMath.decodeMaxPixel, höchstens
     /// 4096 px), damit der Ausschnitt scharf ist und der Beschnittmodus das ganze Bild zeigen kann. Die Szene zeigt
     /// den Ausschnitt per contentsRect.
-    static func decode(url: URL, size: CGSize?, crop: BoardCrop? = nil, scale: CGFloat) -> DecodedImage? {
+    /// `cap` (E12): Obergrenze der Dekodier-Zielgröße; am Bildschirm CropMath.maxDecodePixel (4096), im Export
+    /// ExportMath.maxDecodePixel (Ziel-DPI statt Backing-Scale).
+    static func decode(url: URL, size: CGSize?, crop: BoardCrop? = nil, scale: CGFloat,
+                       cap: Int = CropMath.maxDecodePixel) -> DecodedImage? {
         // ⚠️ VERIFIZIEREN: kCGImageSourceShouldCache=false verhindert, dass die Quelle die Voll-Bitmap cached.
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
         else { return nil }
-        return decode(source: source, size: size, crop: crop, scale: scale)
+        return decode(source: source, size: size, crop: crop, scale: scale, cap: cap)
     }
 
     /// Wie `decode(url:)`, aber aus Daten im Speicher (Weg imageData, Vorschau vor dem Schreiben – B2).
@@ -71,7 +74,8 @@ enum ImageDecoder {
         return decode(source: source, size: size, scale: scale)
     }
 
-    static func decode(source: CGImageSource, size: CGSize?, crop: BoardCrop? = nil, scale: CGFloat) -> DecodedImage? {
+    static func decode(source: CGImageSource, size: CGSize?, crop: BoardCrop? = nil, scale: CGFloat,
+                       cap: Int = CropMath.maxDecodePixel) -> DecodedImage? {
         guard CGImageSourceGetCount(source) > 0,
               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let rawWidth = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
@@ -94,7 +98,8 @@ enum ImageDecoder {
             return nil
         }
         // Ohne Crop wie bisher: längste Kante der Anzeigegröße × Scale. Mit Crop: das ganze Bild in voller Größe F.
-        let maxPixel = CropMath.decodeMaxPixel(displaySize: target, crop: size == nil ? nil : crop, scale: Double(scale))
+        let maxPixel = CropMath.decodeMaxPixel(displaySize: target, crop: size == nil ? nil : crop, scale: Double(scale),
+                                               cap: cap)
         // ⚠️ VERIFIZIEREN: kCGImageSourceShouldCacheImmediately dekodiert hier (Hintergrund) statt lazy beim
         // ersten Rendern auf dem Main Thread. Thumbnails werden nie über die Quellgröße hinaus vergrößert;
         // der Layer skaliert dann (contentsGravity .resize).

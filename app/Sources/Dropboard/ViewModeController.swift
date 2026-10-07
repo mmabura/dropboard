@@ -45,6 +45,8 @@ final class ViewModeController {
     private var openedAt: TimeInterval = 0
     /// Beschnittmodus (E11), Unterzustand des Ansichtsmodus.
     let crop: CropController
+    /// E12: ⌘E → Export im zuletzt gewählten Format (setzt der DragCoordinator).
+    var onExport: (@MainActor () -> Void)?
 
     init(presenter: BoardPresenter, board: BoardController, motion: MotionPreferences, diagnostics: Diagnostics) {
         self.presenter = presenter
@@ -336,6 +338,17 @@ final class ViewModeController {
 
     /// true = verbraucht (kein Beep, nicht weitergereicht).
     private func handleKey(_ event: NSEvent) -> Bool {
+        // E12: ⌘E = Export im zuletzt gewählten Format. Nur ⌘ (⌃⌥⌘E ist der Ausblenden-Hotkey, läuft über Carbon).
+        if event.keyCode == ViewModeController.keyCodeE && ViewModeController.isCommandOnly(event.modifierFlags) {
+            if event.isARepeat { return true }
+            if crop.isActive {
+                Log.line("[EXPORT]", "⌘E im Beschnittmodus ignoriert (erst übernehmen oder abbrechen)")
+                return true
+            }
+            Log.line("[VIEW]", "Taste ⌘E fenster=\(windowName(event.window)) NSApp.isActive=\(NSApp.isActive) → Export")
+            onExport?()
+            return true
+        }
         // E11: im Beschnittmodus Return/Enter/Esc/R; Backspace löscht dort NICHT.
         if crop.isActive {
             return crop.handleKey(event, windowName: windowName(event.window), options: motionOptions)
@@ -358,6 +371,15 @@ final class ViewModeController {
             deleteSelected(key: key)
         }
         return true
+    }
+
+    /// kVK_ANSI_E
+    static let keyCodeE: UInt16 = 14
+
+    /// Nur ⌘ gedrückt (⇧/⌃/⌥ nicht; Feststelltaste egal).
+    static func isCommandOnly(_ flags: NSEvent.ModifierFlags) -> Bool {
+        let f = flags.intersection(.deviceIndependentFlagsMask)
+        return f.contains(.command) && !f.contains(.shift) && !f.contains(.control) && !f.contains(.option)
     }
 
     private func windowName(_ w: NSWindow?) -> String {

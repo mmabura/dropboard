@@ -12,6 +12,12 @@ protocol StatusMenuHost: AnyObject {
     func revealBoardFolder()
     func revealLogFile()
     func quitFromMenu()
+    // Export (E12)
+    var canExportBoard: Bool { get }
+    var isExportRunning: Bool { get }
+    func exportBoard(format: ExportFormat)
+    func chooseExportFolder()
+    func useDesktopExportFolder()
 }
 
 /// Menüleisten-Symbol (Briefing-Schritt 8): Bedienen und Beenden ohne Terminal.
@@ -33,6 +39,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let cornerItems: [(EarCorner, NSMenuItem)]
     private let delayItems: [(Int, NSMenuItem)]
     private let loginItem: NSMenuItem
+    // Export (E12)
+    private let exportParent: NSMenuItem
+    private let exportFormatItems: [(ExportFormat, NSMenuItem)]
+    private let exportDPIItems: [(Int, NSMenuItem)]
+    private let exportAreaItems: [(ExportArea, NSMenuItem)]
+    private let exportDesktopItem: NSMenuItem
+    private let exportCustomItem: NSMenuItem
+    private let exportChooseItem: NSMenuItem
 
     static func title(of corner: EarCorner) -> String {
         switch corner {
@@ -40,6 +54,21 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         case .topLeft: return "Oben links"
         case .bottomRight: return "Unten rechts"
         case .bottomLeft: return "Unten links"
+        }
+    }
+
+    static func title(of format: ExportFormat) -> String {
+        switch format {
+        case .png: return "Als PNG"
+        case .pdf: return "Als PDF"
+        case .folder: return "Originale als Ordner"
+        }
+    }
+
+    static func title(of area: ExportArea) -> String {
+        switch area {
+        case .content: return "Nur Inhalt"
+        case .full: return "Ganze Fläche"
         }
     }
 
@@ -65,6 +94,20 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             return (ms, NSMenuItem(title: "\(ms) ms\(suffix)", action: nil, keyEquivalent: ""))
         }
         loginItem = NSMenuItem(title: "Beim Anmelden starten", action: nil, keyEquivalent: "")
+        exportParent = NSMenuItem(title: "Board exportieren", action: nil, keyEquivalent: "")
+        exportFormatItems = ExportFormat.allCases.map {
+            ($0, NSMenuItem(title: StatusMenuController.title(of: $0), action: nil, keyEquivalent: ""))
+        }
+        exportDPIItems = ExportMath.dpiChoices.map { dpi in
+            let suffix = dpi == ExportMath.defaultDPI ? " (Standard)" : ""
+            return (dpi, NSMenuItem(title: "\(dpi) dpi\(suffix)", action: nil, keyEquivalent: ""))
+        }
+        exportAreaItems = ExportArea.allCases.map {
+            ($0, NSMenuItem(title: StatusMenuController.title(of: $0), action: nil, keyEquivalent: ""))
+        }
+        exportDesktopItem = NSMenuItem(title: "Schreibtisch", action: nil, keyEquivalent: "")
+        exportCustomItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        exportChooseItem = NSMenuItem(title: "Anderer Ordner…", action: nil, keyEquivalent: "")
         super.init()
         buildMenu()
         statusItem.button?.image = StatusMenuController.makeIcon()
@@ -118,6 +161,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(loginItem)
 
         menu.addItem(.separator())
+        buildExportMenu()
         menu.addItem(item("Board-Ordner im Finder zeigen", #selector(revealBoardFolder(_:))))
 
         menu.addItem(.separator())
@@ -137,6 +181,61 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(quitItem)
     }
 
+    /// E12: Untermenü „Board exportieren“ – drei Formate (ein Klick exportiert sofort), DPI, Bereich, Exportordner.
+    /// Häkchen = gewählter Wert (Systemmenü-Darstellung). Das zuletzt gewählte Format zeigt ⌘E (= Kürzel im Ansichtsmodus).
+    private func buildExportMenu() {
+        let exportMenu = NSMenu(title: "Board exportieren")
+        exportMenu.autoenablesItems = false
+        for (format, entry) in exportFormatItems {
+            entry.action = #selector(exportAs(_:))
+            entry.target = self
+            entry.representedObject = format.rawValue
+            exportMenu.addItem(entry)
+        }
+        exportMenu.addItem(.separator())
+        exportMenu.addItem(header("Auflösung"))
+        for (dpi, entry) in exportDPIItems {
+            entry.action = #selector(chooseExportDPI(_:))
+            entry.target = self
+            entry.tag = dpi
+            entry.indentationLevel = 1
+            exportMenu.addItem(entry)
+        }
+        exportMenu.addItem(.separator())
+        exportMenu.addItem(header("Bereich"))
+        for (area, entry) in exportAreaItems {
+            entry.action = #selector(chooseExportArea(_:))
+            entry.target = self
+            entry.representedObject = area.rawValue
+            entry.indentationLevel = 1
+            exportMenu.addItem(entry)
+        }
+        exportMenu.addItem(.separator())
+        exportMenu.addItem(header("Exportordner"))
+        exportDesktopItem.action = #selector(chooseExportDesktop(_:))
+        exportDesktopItem.target = self
+        exportDesktopItem.indentationLevel = 1
+        exportMenu.addItem(exportDesktopItem)
+        // Eigener Ordner (nur sichtbar, wenn gewählt): Anzeige mit Häkchen, Klick ändert nichts.
+        exportCustomItem.indentationLevel = 1
+        exportCustomItem.isHidden = true
+        exportMenu.addItem(exportCustomItem)
+        exportChooseItem.action = #selector(chooseExportFolder(_:))
+        exportChooseItem.target = self
+        exportChooseItem.indentationLevel = 1
+        exportMenu.addItem(exportChooseItem)
+
+        exportParent.submenu = exportMenu
+        menu.addItem(exportParent)
+    }
+
+    /// Nicht anklickbare Zwischenüberschrift.
+    private func header(_ title: String) -> NSMenuItem {
+        let entry = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        entry.isEnabled = false
+        return entry
+    }
+
     private func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
         let entry = NSMenuItem(title: title, action: action, keyEquivalent: key)
         entry.target = self
@@ -151,6 +250,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         for (c, entry) in cornerItems { entry.state = c == corner ? .on : .off }
         let delay = settings.expandDelayMs
         for (ms, entry) in delayItems { entry.state = ms == delay ? .on : .off }
+
+        refreshExport()
 
         if LoginItem.isAppBundle {
             let status = LoginItem.status
@@ -170,6 +271,35 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             loginItem.title = "Beim Anmelden starten (nur in Dropboard.app)"
             loginItem.state = .off
             loginItem.isEnabled = false
+        }
+    }
+
+    private func refreshExport() {
+        let canExport = host?.canExportBoard ?? false
+        let running = host?.isExportRunning ?? false
+        exportParent.title = running ? "Board exportieren (läuft …)" : "Board exportieren"
+        let last = settings.exportFormat
+        for (format, entry) in exportFormatItems {
+            entry.isEnabled = canExport
+            entry.toolTip = canExport ? nil : (running ? "Es läuft schon ein Export" : "Das Board ist leer")
+            // Anzeige ⌘E am zuletzt gewählten Format (greift auch bei offenem Menü).
+            entry.keyEquivalent = format == last ? "e" : ""
+            entry.keyEquivalentModifierMask = format == last ? [.command] : []
+        }
+        let dpi = settings.exportDPI
+        for (d, entry) in exportDPIItems { entry.state = d == dpi ? .on : .off }
+        let area = settings.exportArea
+        for (a, entry) in exportAreaItems { entry.state = a == area ? .on : .off }
+        let custom = settings.exportFolder
+        exportDesktopItem.state = custom == nil ? .on : .off
+        if let url = custom {
+            exportCustomItem.isHidden = false
+            exportCustomItem.title = url.lastPathComponent
+            exportCustomItem.toolTip = url.path
+            exportCustomItem.state = .on
+        } else {
+            exportCustomItem.isHidden = true
+            exportCustomItem.state = .off
         }
     }
 
@@ -233,6 +363,40 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             LoginItem.openSystemSettings()
         }
         refresh()
+    }
+
+    // MARK: Export (E12)
+
+    @objc private func exportAs(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let format = ExportFormat(rawValue: raw) else { return }
+        Log.line("[EXPORT]", "Menü: Board exportieren → \(sender.title)")
+        host?.exportBoard(format: format)
+        refresh()
+    }
+
+    @objc private func chooseExportDPI(_ sender: NSMenuItem) {
+        let old = settings.exportDPI
+        settings.exportDPI = sender.tag
+        Log.line("[EXPORT]", "DPI \(old) → \(settings.exportDPI) (gespeichert)")
+        refresh()
+    }
+
+    @objc private func chooseExportArea(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let area = ExportArea(rawValue: raw) else { return }
+        let old = settings.exportArea
+        settings.exportArea = area
+        Log.line("[EXPORT]", "Bereich \(old.rawValue) → \(area.rawValue) (gespeichert)")
+        refresh()
+    }
+
+    @objc private func chooseExportDesktop(_ sender: NSMenuItem) {
+        host?.useDesktopExportFolder()
+        refresh()
+    }
+
+    @objc private func chooseExportFolder(_ sender: NSMenuItem) {
+        Log.line("[EXPORT]", "Menü: Exportordner → Anderer Ordner…")
+        host?.chooseExportFolder()
     }
 
     @objc private func revealBoardFolder(_ sender: NSMenuItem) {

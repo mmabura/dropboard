@@ -47,6 +47,12 @@ Per Dropbox synchronisierte Kopien sollten meist ohne diese Sperre starten.
     (Standard 300 ms).
   - „Beim Anmelden starten“ – Dropboard startet automatisch nach dem Anmelden (nur sinnvoll, wenn die App im
     Ordner „Programme“ liegt; ggf. in Systemeinstellungen → Allgemein → Anmeldeobjekte bestätigen).
+  - **„Board exportieren“** – „Als PNG“, „Als PDF“ oder „Originale als Ordner“ exportiert sofort, ohne Nachfrage,
+    auf den Schreibtisch (Datei „Dropboard <Datum Uhrzeit>“) und zeigt die Datei im Finder.
+    Darunter: Auflösung (72, 150, 300 oder 600 dpi; Standard 300), Bereich („Nur Inhalt“ = alle Bilder mit etwas
+    Papierrand, oder „Ganze Fläche“) und Exportordner („Schreibtisch“ oder „Anderer Ordner…“ zum Auswählen).
+    Sehr große Exporte werden automatisch auf höchstens 16 384 Pixel pro Seite begrenzt (die DPI sinkt dann etwas).
+    Im Board (nach Klick aufs Eselsohr) exportiert **⌘E** im zuletzt gewählten Format; das Board schließt dabei.
   - „Board-Ordner im Finder zeigen“ – dort liegen die Bildkopien.
   - **„Dropboard beenden“**.
 - Fehlt das Symbol in der Menüleiste (zu viele Symbole oder in den Systemeinstellungen → Menüleiste ausgeblendet),

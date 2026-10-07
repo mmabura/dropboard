@@ -2,7 +2,7 @@
 
 Zusammenführung der drei Spikes (`spikes/eselsohr-drop`, `spikes/board-paper`, `spikes/stopmotion`) zu einer App:
 Eselsohr oben rechts, Drop-Annahme, Quick-Drop mit Speicherung, Board aus Papier, Realtime-Expand per Drag-Hover,
-Stop-Motion nach dem Drop, Ansichtsmodus, Menüleisten-Symbol mit Einstellungen (Schritt 8), Beschnitt per Doppelklick (E11). Grundlage: `docs/briefing.md`, `docs/entscheidungen.md` (E1–E11), `docs/phase0/`.
+Stop-Motion nach dem Drop, Ansichtsmodus, Menüleisten-Symbol mit Einstellungen (Schritt 8), Beschnitt per Doppelklick (E11), Export mit DPI (E12). Grundlage: `docs/briefing.md`, `docs/entscheidungen.md` (E1–E12), `docs/phase0/`.
 
 **Status (7. Okt. 2026, Version 0.1.24, Commit ebf8359):** baut auf dem Mac mini (macOS 26.5.1, Swift 6.1.2, nur Command
 Line Tools) ohne Fehler und Warnungen, `--selftest` 323/323 PASS, Universal-App ad-hoc signiert, startet und ist im Idle
@@ -19,6 +19,7 @@ swift run Dropboard --selftest                # Logik-Assertions, kein Fenster; 
 swift run Dropboard                           # App (Handoff two-panels)
 swift run Dropboard --handoff grow            # Handoff-Variante B
 .build/debug/Dropboard --snapshot /tmp/db.png --snapshot-demo   # Offscreen-PNG ohne Fenster/Berechtigung
+.build/debug/Dropboard --export /tmp/ --snapshot-demo --dpi 300 # Export (E12) ohne Fenster, Demo-Board
 ```
 
 Beenden: Menüleisten-Symbol → „Dropboard beenden“ (oder Ctrl-C im Terminal, wird geloggt). Die App hat kein
@@ -31,10 +32,15 @@ Dock-Icon (`.accessory`) und aktiviert sich nie.
 | `--handoff two-panels\|grow` | Übergabe der Drag-Session ans Board. Default `two-panels` (`DropboardConfig.defaultHandoff`), weil T4 auf Hardware offen ist. |
 | `--board-dir <pfad>` | Anderer Board-Ordner statt `~/Library/Application Support/Dropboard/Boards/default` (Tests). |
 | `--reduce-motion` | „Bewegung reduzieren“ erzwingen (zusätzlich zur Systemeinstellung, E2). |
-| `--selftest` | Stop-Motion-Planer (55 Spike-Tests) + Layout + Store + Ansichtsmodus (47) + Einstellungen (42) + Fix A/B/C + Beschnitt (`crop…`, 107). Kein Fenster. Exit 0/1. |
+| `--selftest` | Stop-Motion-Planer (55 Spike-Tests) + Layout + Store + Ansichtsmodus (47) + Einstellungen (42) + Fix A/B/C + Beschnitt (`crop…`, 107) + Export (`export…`, inkl. Mini-Render PNG/PDF/Ordner in einen temporären Ordner). Kein Fenster. Exit 0/1. |
 | `--snapshot <pfad.png>` | Board mit den gespeicherten Bildern offscreen per `CALayer.render(in:)` in Backing-Scale als PNG, dazu das Eselsohr als `<pfad ohne .png>-ear.png`. Dann Ende. |
 | `--snapshot-demo` | Mit `--snapshot`: 5 Platzhalterbilder (3 per Free-Slot-Finder, 2 per Cursor-Drop), ein **beschnittenes** Bild (E11: vier Farbfelder, Ausschnitt `(0.1,0.1 0.6x0.6)`) plus ein offener Platzhalter in einem **temporären** Board (wird danach gelöscht; der echte Ordner bleibt unberührt). Zusätzlich `<pfad ohne .png>-crop.png`: dasselbe Board mit dem beschnittenen Bild im Beschnittmodus. |
 | `--snapshot-dimmed` | Mit `--snapshot`: abgedunkeltes Papier (Look während des Drags). |
+| `--export <pfad>` | Export (E12) ohne Fenster, dann Ende (Exit 0/1). Vorhandener Ordner → automatischer Name darin (`Dropboard <yyyy-MM-dd HH.mm.ss>.<ext>`, kollisionsfrei); sonst genau dieser Pfad (vorhandene Datei wird ersetzt). Mit `--snapshot-demo` aus einem temporären Demo-Board (inkl. beschnittenem Bild), sonst aus `--board-dir` bzw. dem echten Board (nur gelesen). |
+| `--format png\|pdf\|folder` | Mit `--export`: Format. Ohne Angabe aus der Endung (`.pdf`/`.png`), sonst PNG. |
+| `--dpi <n>` | Mit `--export`: DPI, Standard 300; im CLI 1…2400 (Menü nur 72/150/300/600). |
+| `--area content\|full` | Mit `--export`: nur Inhalt (Standard) oder ganze Fläche. |
+| `--pdf-layers` | Mit `--export` und PDF: Versuch „Layer direkt in den PDF-Kontext“ statt Bitmap (siehe Export). |
 
 ## Ablage
 
@@ -67,10 +73,11 @@ Dock-Icon (`.accessory`) und aktiviert sich nie.
 | `EarPlacement.swift` | `EarCorner` (4 Ecken), `EarGeometry` (Eselsohr-Rahmen im visibleFrame, äußere Ecke, Anker fürs Aufblättern), `ExpandDelay` (150/300/500/800 ms, Standard 300) | neu (Schritt 8) |
 | `BoardEditing.swift` | Ansichtsmodus-Logik: Treffer-Test (mit Rotation), Umsortieren/Löschen im Modell, Snap-Ziel, `ViewModeSequences` (Blatt auf/zu, 3 Frames), `BoardStore.moveImageToTrash` | neu (Schritt 7) |
 | `Crop.swift` | Beschnitt (E11): `BoardCrop`, `CropMath` (Klemmen, Mindestgröße, Griffe inkl. ⇧, Verschieben, „sichtbarer Teil bleibt an Ort“ mit Rotation, contentsRect, Dekodier-Zielgröße), `CropEditor` (Sitzung, Treffer-Test), `CropEditing` (Modell), `CropSequences` (Planer) | neu (E11) |
+| `Export.swift` | Export (E12): `ExportFormat`, `ExportArea`, `ExportMath` (Bereich inkl. Rotation/Schatten/Papierrand, Pixelmaß, DPI-Kappung 16 384 px, Dekodier-Zielgröße, Noise-Körnung, pHYs), `ExportPixelPlan`, `ExportNaming` (Zeitstempel, Kollision, Originalnamen, `index.txt`) | neu (E12) |
 | **Dropboard** (AppKit/QuartzCore) | | |
 | `main.swift` | Argumente, `--selftest`, `--snapshot`, App-Start (`MainActor.assumeIsolated`) | Muster aus eselsohr-drop |
 | `LaunchOptions.swift`, `DropboardConfig.swift` | Argumente; alle Verhaltens-Konstanten (E8 `dropCloseDelay`, E10 `defaultExpandDelayMs`, `defaultCorner`, Handoff-Default, Eselsohr-Geometrie, Watchdog) | neu / eselsohr-drop |
-| `Settings.swift` | Einstellungen in `UserDefaults.standard`, Keys `dropboard.corner`, `dropboard.expandDelayMs`, `dropboard.launchAtLogin` (Spiegel) | neu (Schritt 8) |
+| `Settings.swift` | Einstellungen in `UserDefaults.standard`, Keys `dropboard.corner`, `dropboard.expandDelayMs`, `dropboard.launchAtLogin` (Spiegel); Export (E12): `dropboard.exportFormat`, `…exportDPI`, `…exportArea`, `…exportFolderPath`/`…exportFolderBookmark` | neu (Schritt 8) |
 | `StatusMenu.swift` | `StatusMenuController`: Menüleisten-Symbol (Template, programmatisch gezeichnet) und Menü; `StatusMenuHost` (= AppController) | neu (Schritt 8) |
 | `HotKey.swift` | `GlobalHotKey` (Carbon `RegisterEventHotKey`, ohne Berechtigung), `HideHotKey` (⌃⌥⌘E) | neu (Schritt 8) |
 | `LoginItem.swift` | „Beim Anmelden starten“ über `SMAppService.mainApp` | neu (Schritt 8) |
@@ -89,6 +96,8 @@ Dock-Icon (`.accessory`) und aktiviert sich nie.
 | `CropPresentation.swift` | `CropStyle` (Look, `contentsRectOriginTop`), `CropOverlay` (Abdunklung, Rahmen, 8 Griffe im Item-Layer) | neu (E11) |
 | `PaperStyle.swift`, `PaperArt.swift` | Look-Konstanten; Noise-Kachel/-Tiling, Eselsohr-Bitmap, Demo-Bilder, PNG-Export | board-paper |
 | `Diagnostics.swift`, `Log.swift` | `[WIN]`/`[FOCUS]`-Logs; Logger, FileProbe | eselsohr-drop |
+| `Exporter.swift` | Export (E12): Offscreen-Szene (Papier + Noise in Exportskala, Item-Layer mit hartem Schatten, Kipp, Beschnitt), Bilder neu aus den Originalen dekodiert, PNG mit DPI, PDF (Bitmap/Layer), Ordner mit Originalen; `ExportCLI` (`--export`) | neu (E12) |
+| `ExportController.swift` | Export-Bedienung: Start/Ende auf dem Main Thread, Hintergrund-Queue, Finder zeigen, Exportordner (Schreibtisch / Ordner-Dialog mit der einzigen erlaubten Aktivierung), `[EXPORT]`-Logs | neu (E12) |
 | `Snapshot.swift`, `SelfTest*.swift` | Offscreen-PNG (Eselsohr in der gespeicherten Ecke); Selftest (`SelfTestViewMode.swift` = Teil 4, Ansichtsmodus; `SelfTestSettings.swift` = Teil 5, Ecken/Einstellungen; `SelfTestCrop.swift` = Beschnitt) | neu / stopmotion |
 
 ### Realtime vs. Stop-Motion
@@ -105,8 +114,8 @@ Das Board ist während des Drags abgedunkelt (Graphit 0,35 über dem Papier, unt
 
 ### Ansichtsmodus (Schritt 7)
 
-Klick aufs Eselsohr (kein Drag) öffnet das Board zum Betrachten, Umsortieren und Löschen. Export gehört nicht
-zum Prototyp. Zustand im `DragCoordinator`: `idle → viewing → viewClosing → idle`; Interaktion in `ViewModeController`.
+Klick aufs Eselsohr (kein Drag) öffnet das Board zum Betrachten, Umsortieren und Löschen; ⌘E exportiert (E12, siehe
+„Export“). Zustand im `DragCoordinator`: `idle → viewing → viewClosing → idle`; Interaktion in `ViewModeController`.
 
 | Aktion | Verhalten | Pfad |
 |---|---|---|
@@ -178,6 +187,71 @@ aktivierenden Panel; Cursor und `mouseMoved` bei inaktiver App; `CALayer.render(
 | 9m | Reduce Motion | mit `--reduce-motion` 9a, 9e, 9g | `turn frames=1 duration=0.000s animated=false`, `settle frames=1 … animated=false` | alles sofort, kein Zittern |
 | 9n | Platzhalter | Doppelklick auf einen Platzhalter (Bild noch nicht geladen) | `[CROP] Beschnitt öffnen ignoriert id=… (Platzhalter oder Bild nicht geladen)` | bleibt ausgewählt, kein Beschnittmodus |
 
+## Export (E12)
+
+Ein Klick exportiert direkt, **ohne Speichern-Dialog**, in den Exportordner (Standard: Schreibtisch) und zeigt die Datei
+im Finder (`NSWorkspace.activateFileViewerSelecting`; der Finder kommt nach vorn, Dropboard wird nicht aktiviert).
+Datei: `Dropboard <yyyy-MM-dd HH.mm.ss>.<ext>`, bei Kollision `… 2.<ext>`, `… 3.<ext>`.
+
+| Bedienung | Wirkung |
+|---|---|
+| Menüleiste → Board exportieren → Als PNG / Als PDF / Originale als Ordner | sofort exportieren; das Format wird als „zuletzt gewählt“ gespeichert (Anzeige ⌘E am Eintrag). Leeres Board oder laufender Export: Einträge grau. |
+| … → Auflösung: 72 / 150 / 300 (Standard) / 600 dpi | Häkchen, gespeichert. Pixelmaß = pt × DPI ÷ 72. |
+| … → Bereich: Nur Inhalt (Standard) / Ganze Fläche | Nur Inhalt = umschließendes Rechteck aller Bilder inkl. Kipp und hartem Schatten + 48 pt Papierrand, auf ganze pt gerundet. Ganze Fläche = das Board (Bildschirm-Frame). |
+| … → Exportordner: Schreibtisch / Anderer Ordner… | „Anderer Ordner…“ öffnet ein `NSOpenPanel` – **nur auf diesen ausdrücklichen Klick**. Dafür wird Dropboard bewusst per `NSApp.activate()` aktiviert (sonst käme der Dialog nicht nach vorn) – die einzige Ausnahme vom Fokus-Grundsatz, geloggt; danach wird die vorher vordere App wieder aktiviert. Gespeichert als Pfad + Bookmark; fehlt der Ordner später, wird auf den Schreibtisch exportiert (Log). |
+| Ansichtsmodus: ⌘E | Export im zuletzt gewählten Format (Standard PNG). Der Ansichtsmodus schließt dabei (sonst läge das Board über dem Finder-Fenster). Leeres Board: nur Logzeile, Board bleibt offen. Im Beschnittmodus ignoriert. |
+
+Einstellungen in `UserDefaults`: `dropboard.exportFormat` (`png|pdf|folder`), `dropboard.exportDPI` (72/150/300/600),
+`dropboard.exportArea` (`content|full`), `dropboard.exportFolderPath` + `dropboard.exportFolderBookmark` (fehlen = Schreibtisch).
+
+**Look:** eigene Offscreen-Szene, keine UI-Layer (kein Eselsohr, keine Auswahl, keine Griffe, keine Abdunklung). Papier
+(`paperHex`) und Noise werden direkt in den Bitmap-Kontext gezeichnet, die Bilder als Layer wie am Bildschirm (harter
+Schatten per `shadowPath`, Kipp, Beschnitt per `contentsRect`) per `CALayer.render(in:)` mit `scaleBy(px/pt)` darüber.
+Die Noise-Kachel wird auf `256 × Exportskala ÷ Bildschirm-Scale` px skaliert (vergrößert ohne Interpolation,
+verkleinert mit), damit ein Kachelpixel physisch so groß ist wie am Bildschirm (1 Device-Pixel) – gleiche Körnung bei
+jeder DPI.
+
+**Bilder** werden für den Export **neu aus den Originalen** dekodiert (`ImageDecoder.decode(…, cap:)`,
+`CGImageSourceCreateThumbnailAtIndex` mit `WithTransform`, `MaxPixelSize`): das ganze Bild in voller Größe
+F (= Anzeigegröße ÷ Crop-Anteil) × DPI ÷ 72, höchstens 8192 px (`ExportMath.maxDecodePixel`); ImageIO vergrößert nie über
+die Quelle hinaus.
+
+**Obergrenze:** 16 384 px pro Seite. Wäre die längere Seite größer, sinkt die DPI so, dass sie genau 16 384 px hat;
+Log `[EXPORT] DPI abgesenkt: angefragt 600 → effektiv 460.8 …`. Vor dem Rendern wird der Speicher geschätzt
+(Bitmap 4 B/px + dekodierte Bilder) und geloggt; ab 1,2 GB WARNUNG, über 3 GB kein Export.
+
+| Format | Umsetzung |
+|---|---|
+| PNG | sRGB, ohne Alpha (RGBX-Kontext), DPI-Metadaten über `kCGImagePropertyDPIWidth/Height` (ImageIO → pHYs). |
+| PDF (Standard `bitmap`) | Seitengröße = Exportbereich in pt; die Szene wird wie beim PNG als Bitmap in Ziel-DPI gerendert und als ein Bild auf die Seite gezeichnet. Begründung: identischer, belegter Renderweg; ob Schatten und `contentsRect` beim `render(in:)` in einen PDF-Kontext stimmen, ist unbelegt. Metadaten Titel „Dropboard“, Creator „Dropboard <Version>“. |
+| PDF `--pdf-layers` (Versuch) | Papier/Noise per CoreGraphics, Item-Layer per `render(in:)` direkt in den PDF-Kontext (Bilder als eigene Bildobjekte, kleinere Datei). Wird Standard (`ExportConfig.defaultPDFMode`), wenn auf dem Mac bestätigt ist, dass Schatten, Kipp und Beschnitt stimmen. |
+| Originale als Ordner | Unterordner `Dropboard <Zeitstempel>` mit Kopien der Originale (Name aus `source.originalName`, sonst gespeicherter Name; Endung der gespeicherten Datei; kollisionsfrei ohne Groß/Klein), `board.json` (Stand des Dokuments) und `index.txt` (Reihenfolge = Stapel, Herkunft App/Pfad/URL, Zeitstempel, Beschnitt). |
+
+Alles Schwere (Dekodieren, Rendern, Schreiben) läuft auf `Exporter.queue` (seriell, `.userInitiated`); der Main Thread
+startet nur und zeigt am Ende die Datei. Es läuft höchstens ein Export gleichzeitig.
+
+⚠️ VERIFIZIEREN (Mac): `CALayer.render(in:)` auf einer Hintergrund-Queue; RGBX-Kontext (`noneSkipLast`) als Ziel;
+pHYs aus `DPIWidth/Height` (Selftest liest zurück); PDF-API (`CGContext(url:mediaBox:…)`, `beginPDFPage`); `--pdf-layers`
+(Schatten/Beschnitt im PDF); `NSApp.activate()` + `NSOpenPanel.begin` in der `.accessory`-App und Rückgabe des Fokus
+(`NSRunningApplication.activate(options:)`); Bookmark ohne Sandbox; ⌘E über den lokalen Key-Monitor.
+
+### Testschritte Export (Tag `[EXPORT]`)
+
+| # | Aktion | Erwartet (Log) | Prüfen (Auge) |
+|---|---|---|---|
+| 10 | Selftest | `swift run Dropboard --selftest` → alle `export…`-Zeilen PASS, u. a. `export render: PNG zurückgelesen: DPI-Property 144.00×144.00 ≈ 144`, `… Bild B (Crop oben links) Mitte ≈ Terrakotta`, `… PDF (bitmap, Standard): 1 Seite, Seitengröße …` | – |
+| 10a | CLI PNG | `.build/debug/Dropboard --export /tmp/ --snapshot-demo` | `[EXPORT] Start format=png bereich=content rect=(…)pt 300→300.0 dpi …px … speicher≈…`, `[EXPORT] Export fertig format=png … dpi=300→300.0 pixel=…x… bilder=6 fehlend=0 dauer=…ms größe=…B pfad=/tmp/Dropboard <Datum>.png` | Vorschau: Papier mit feiner Körnung, harte Schatten unten rechts, Kipp, beschnittenes Bild zeigt oben links Terrakotta; kein Eselsohr, keine Auswahl. Vorschau → Werkzeuge → Informationen: 300 dpi |
+| 10b | CLI 72/600/ganze Fläche | `--export /tmp/a72.png --snapshot-demo --dpi 72`, dann `--dpi 600 --area full` | 72: Pixel = pt; 600 + ganze Fläche: bei Bildschirmbreite > 1966 pt `DPI abgesenkt … → effektiv …`, längere Seite genau 16384 px | Körnung bei 72 und 600 dpi in gleicher Druckgröße gleich grob (z. B. beide auf 100 % physischer Größe vergleichen) |
+| 10c | CLI PDF | `--export /tmp/db.pdf --snapshot-demo`, dann `--export /tmp/db-layers.pdf --snapshot-demo --pdf-layers` | `format=pdf pdf=bitmap …`, `… pdf=layers …` | `mdls -name kMDItemTitle -name kMDItemCreator /tmp/db.pdf` → „Dropboard“; Seitengröße = Bereich in pt (Vorschau → Informationen). `db-layers.pdf`: Schatten, Kipp, Beschnitt wie im PNG? Wenn ja → Befund „layers kann Standard werden“ |
+| 10d | CLI Ordner | `--export /tmp/ --format folder --snapshot-demo` | `format=folder … bilder=6 fehlend=0 …` | Ordner `Dropboard <Datum>` mit 6 PNGs, `board.json`, `index.txt` |
+| 10e | Menü PNG | Bild(er) auf dem Board, Menüleiste → Board exportieren → Als PNG | `[EXPORT] Menü: Board exportieren → Als PNG`, `[EXPORT] Export angefordert grund=Menüleiste format=png dpi=300 bereich=content ordner=Schreibtisch …`, `Start …`, `Export fertig …`, `Im Finder gezeigt …` | Datei auf dem Schreibtisch, Finder markiert sie; kein `!!! DROPBOARD SELBST AKTIVIERT` |
+| 10f | DPI/Bereich | Menü → 600 dpi, Ganze Fläche; dann Als PDF | `[EXPORT] DPI 300 → 600 (gespeichert)`, `[EXPORT] Bereich content → full (gespeichert)`, `Export fertig format=pdf pdf=bitmap bereich=full …` | Häkchen an 600 dpi / Ganze Fläche; Neustart: bleibt; ⌘E steht jetzt bei „Als PDF“ |
+| 10g | ⌘E | Klick aufs Eselsohr (Ansichtsmodus), ⌘E | `[VIEW] Taste ⌘E fenster=board …→ Export`, `[VIEW] Ansichtsmodus schließen grund=Export ⌘E …`, `[EXPORT] Export angefordert grund=⌘E im Ansichtsmodus format=<zuletzt> …` | Board klappt zu, Finder zeigt die Datei |
+| 10h | ⌘E im Beschnitt / leer | Doppelklick aufs Bild, ⌘E; leeres Board, ⌘E | `[EXPORT] ⌘E im Beschnittmodus ignoriert …` bzw. `[EXPORT] ⌘E: Board ist leer → nichts exportiert` | Beschnitt bleibt offen bzw. Board bleibt offen; Menüeinträge bei leerem Board grau |
+| 10i | Anderer Ordner… | Menü → Exportordner → Anderer Ordner…, Ordner wählen | `[EXPORT] Ordner-Dialog: NSApp.activate – vom Nutzer ausgelöste Ausnahme …`, `[FOCUS] App aktiviert: … (erwartet: Ordner-Dialog Exportordner, vom Nutzer ausgelöst)`, `[EXPORT] Exportordner Schreibtisch → <pfad>`, `… wieder aktiviert=true` | Dialog kommt nach vorn und nimmt Tasten an; danach ist die vorher vordere App wieder vorn; Menü zeigt den Ordnernamen mit Häkchen. Abbrechen: `Ordner-Dialog abgebrochen …` |
+| 10j | Ordner fehlt | gewählten Ordner löschen, Als PNG | `[EXPORT] Exportordner fehlt <pfad> → Schreibtisch` | Datei auf dem Schreibtisch |
+| 10k | zweimal schnell | zweimal kurz hintereinander Als PNG | zweiter: `… ignoriert: es läuft schon ein Export` oder (falls schon fertig) `Dropboard <Datum> 2.png` bei gleicher Sekunde | – |
+
 ## Menüleiste und Einstellungen (Schritt 8)
 
 Ein Menüleisten-Symbol (Blatt mit Eselsohr, Template-Bild, folgt hell/dunkel der Menüleiste) macht die App ohne
@@ -192,6 +266,7 @@ nicht aktiviert (⚠️ VERIFIZIEREN, Test 8).
 | Ecke ▸ Oben rechts / Oben links / Unten rechts / Unten links | Eselsohr springt sofort in die Ecke: 12 pt seitlich eingerückt, 2 pt unter der Menüleiste bzw. über dem Dock (`visibleFrame`). Die umgeknickte Ecke zeigt zur Bildschirmecke, der Falz zur Mitte; Aufblättern (Realtime und Ansichtsmodus) geht von dieser Ecke aus. Gespeichert. |
 | Verzögerung bis Aufklappen ▸ 150 / 300 (Standard, E10) / 500 / 800 ms | Drag-Hover bis zum Expand; ab dem nächsten Drag. Gespeichert. |
 | Beim Anmelden starten | `SMAppService.mainApp` register/unregister; Häkchen = `status == .enabled`, Strich = `.requiresApproval` (Klick öffnet Systemeinstellungen → Anmeldeobjekte). Außerhalb einer `.app` (`swift run`) deaktiviert: „(nur in Dropboard.app)“. ⚠️ VERIFIZIEREN mit der ad-hoc-signierten App; am besten nur aus `/Applications/Dropboard.app` einschalten (die Registrierung hängt am Bundle-Ort). |
+| Board exportieren ▸ | Export (E12): Als PNG / Als PDF / Originale als Ordner, Auflösung, Bereich, Exportordner – siehe „Export“. |
 | Board-Ordner im Finder zeigen | `NSWorkspace.activateFileViewerSelecting` auf den Board-Ordner (Finder kommt nach vorn, gewollt). |
 | Über Dropboard ▸ | Untermenü: „Dropboard <Version> (Build <n>)“ aus der Info.plist, sonst „dev“; „Protokoll im Finder zeigen“. Bewusst kein Über-Fenster: das müsste die App aktivieren. |
 | Dropboard beenden (⌘Q) | `NSApp.terminate`. ⌘Q greift nur bei offenem Menü (die App ist nie aktiv). |

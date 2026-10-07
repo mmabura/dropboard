@@ -120,6 +120,11 @@ final class DragCoordinator: NSObject {
         viewMode.mouseUp(at: presenter.boardPoint(fromScreen: screenPoint(view, event)))
     }
 
+    /// E12: ⌘E im Ansichtsmodus → Export (AppController/ExportController).
+    func setExportHandler(_ handler: @escaping @MainActor () -> Void) {
+        viewMode.onExport = handler
+    }
+
     /// Ansichtsmodus öffnen – gleicher Weg für Klick aufs Eselsohr und Menüleiste „Board öffnen“.
     /// Rückgabe: geöffnet? (nur aus `idle`)
     @discardableResult

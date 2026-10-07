@@ -184,7 +184,8 @@ enum Snapshot {
     }
 
     /// 5 Demo-Bilder: 3 per Free-Slot-Finder (Quick-Drop), 2 per Cursor-Drop mit Snap. Fester Seed.
-    private static func populateDemo(_ store: BoardStore, area: CGRect, metrics: LayoutMetrics) throws {
+    /// Auch für `--export --snapshot-demo` (ExportCLI).
+    static func populateDemo(_ store: BoardStore, area: CGRect, metrics: LayoutMetrics) throws {
         try store.prepareDirectories()
         var rng = SplitMix64(seed: 42)
         var document = BoardDocument()

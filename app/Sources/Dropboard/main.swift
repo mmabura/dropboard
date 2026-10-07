@@ -39,6 +39,10 @@ MainActor.assumeIsolated {
         // Offscreen, ohne Fenster und ohne Run-Loop.
         exit(Snapshot.run(launchOptions) ? 0 : 1)
     }
+    if launchOptions.exportPath != nil {
+        // E12: Export ohne Fenster und ohne Run-Loop (synchron), wie Snapshot.
+        exit(ExportCLI.run(launchOptions) ? 0 : 1)
+    }
     let policyOK = app.setActivationPolicy(.accessory)
     let controller = AppController(options: launchOptions)
     app.delegate = controller

@@ -5,7 +5,7 @@ import DropboardCore
 /// Teil 1: Stop-Motion-Planer (unverändert aus spikes/stopmotion/Sources/stopmotion-demo/SelfTest.swift).
 /// Teil 2: Layout (Grid-Snap, Free-Slot-Finder, Konfliktfreiheit). Teil 3: Store (JSON-Roundtrip in temporärem Ordner).
 /// Teil 4: Ansichtsmodus (SelfTestViewMode.swift). Teil 5: Ecken-Geometrie, Verzögerung, Settings-Roundtrip
-/// (SelfTestSettings.swift). Beschnitt (E11): SelfTestCrop.swift.
+/// (SelfTestSettings.swift). Beschnitt (E11): SelfTestCrop.swift. Export (E12): SelfTestExport.swift.
 final class SelfTestChecker {
     private(set) var total = 0
     private(set) var failures = 0
@@ -33,6 +33,7 @@ enum SelfTest {
         FixBSelfTest.run(t)
         FixCSelfTest.run(t)
         CropSelfTest.run(t)
+        ExportSelfTest.run(t)
         print("\(t.total - t.failures)/\(t.total) PASS" + (t.failures == 0 ? "" : ", \(t.failures) FAIL"))
         fflush(stdout)
         return t.failures == 0
