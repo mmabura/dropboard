@@ -24,6 +24,15 @@ Interaktive Prüfungen (Optik, Gesten) sind **noch nicht** gemacht. Sie stehen u
 | Start-Smoketest (4 s, dann SIGTERM) | ✅ läuft, kein Crash; Backing-Scale 2.0 gemeldet; Reduce Motion beim Start: aus |
 | Animationen per Taste, Jitter-Wirkung, CPU im Idle | ⏳ offen – braucht Max |
 
-## eselsohr-drop
+## eselsohr-drop (Commit d1133f5)
 
-⏳ noch in Arbeit.
+| Prüfung | Ergebnis |
+|---|---|
+| `swift build` | ✅ Exit 0, 0 Fehler, 0 Warnungen (25,7 s) |
+| Start-Smoketest `--handoff two-panels` (5 s, dann SIGINT) | ✅ läuft, sauber beendet (exit 0) |
+| `setActivationPolicy(.accessory)` ohne Bundle | ✅ `true` |
+| Level / Collection-Behavior | ✅ beide Panels level 25 (`.statusBar`), behavior `0x151` = canJoinAllSpaces · stationary · ignoresCycle · fullScreenAuxiliary |
+| Kein Fokusraub beim Start | ✅ `NSApp.isActive=false`, frontmost blieb die vorherige App |
+| Eselsohr-Position | ✅ frame (1868,1008 40×40) bei visibleFrame (0,57 1920×993): Oberkante 1048, Menüleiste beginnt bei 1050 → 2 pt darunter, 12 pt vom rechten Rand |
+| Level-Referenz | floating 3 · mainMenu 24 · statusBar 25 · popUpMenu 101 · cgDraggingWindow 500 · screenSaver 1000 (bestätigt Report 02) |
+| Drag-Tests T0–T6 (Thumbnail, Finder, Browser, Handoff, Fokus, Vollbild) | ⏳ offen – Gesten durch Max, Testliste in `spikes/eselsohr-drop/README.md` |
