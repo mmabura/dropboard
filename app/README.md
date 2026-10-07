@@ -1,8 +1,8 @@
-# Dropboard – Prototyp (Phase 2, Briefing-Schritte 1–7)
+# Dropboard – Prototyp (Phase 2, Briefing-Schritte 1–8)
 
 Zusammenführung der drei Spikes (`spikes/eselsohr-drop`, `spikes/board-paper`, `spikes/stopmotion`) zu einer App:
 Eselsohr oben rechts, Drop-Annahme, Quick-Drop mit Speicherung, Board aus Papier, Realtime-Expand per Drag-Hover,
-Stop-Motion nach dem Drop. Grundlage: `docs/briefing.md`, `docs/entscheidungen.md` (E1–E10), `docs/phase0/`.
+Stop-Motion nach dem Drop, Ansichtsmodus, Menüleisten-Symbol mit Einstellungen (Schritt 8). Grundlage: `docs/briefing.md`, `docs/entscheidungen.md` (E1–E10), `docs/phase0/`.
 
 **Status: im Linux-Container geschrieben, nie kompiliert, nie ausgeführt.** Code, der wörtlich aus den Spikes stammt,
 ist auf dem Mac mini kompiliert. Neue, in keinem Spike belegte APIs sind mit `⚠️ VERIFIZIEREN` markiert
@@ -19,7 +19,8 @@ swift run Dropboard --handoff grow            # Handoff-Variante B
 .build/debug/Dropboard --snapshot /tmp/db.png --snapshot-demo   # Offscreen-PNG ohne Fenster/Berechtigung
 ```
 
-Beenden: Ctrl-C im Terminal (wird geloggt). Die App hat kein Dock-Icon (`.accessory`) und aktiviert sich nie.
+Beenden: Menüleisten-Symbol → „Dropboard beenden“ (oder Ctrl-C im Terminal, wird geloggt). Die App hat kein
+Dock-Icon (`.accessory`) und aktiviert sich nie.
 
 ## Argumente
 
@@ -28,7 +29,7 @@ Beenden: Ctrl-C im Terminal (wird geloggt). Die App hat kein Dock-Icon (`.access
 | `--handoff two-panels\|grow` | Übergabe der Drag-Session ans Board. Default `two-panels` (`DropboardConfig.defaultHandoff`), weil T4 auf Hardware offen ist. |
 | `--board-dir <pfad>` | Anderer Board-Ordner statt `~/Library/Application Support/Dropboard/Boards/default` (Tests). |
 | `--reduce-motion` | „Bewegung reduzieren“ erzwingen (zusätzlich zur Systemeinstellung, E2). |
-| `--selftest` | Stop-Motion-Planer (55 Spike-Tests) + Layout + Store + Ansichtsmodus (47). Kein Fenster. Exit 0/1. |
+| `--selftest` | Stop-Motion-Planer (55 Spike-Tests) + Layout + Store + Ansichtsmodus (47) + Einstellungen (42). Kein Fenster. Exit 0/1. |
 | `--snapshot <pfad.png>` | Board mit den gespeicherten Bildern offscreen per `CALayer.render(in:)` in Backing-Scale als PNG, dazu das Eselsohr als `<pfad ohne .png>-ear.png`. Dann Ende. |
 | `--snapshot-demo` | Mit `--snapshot`: 5 Platzhalterbilder (3 per Free-Slot-Finder, 2 per Cursor-Drop) plus ein offener Platzhalter in einem **temporären** Board (wird danach gelöscht; der echte Ordner bleibt unberührt). |
 | `--snapshot-dimmed` | Mit `--snapshot`: abgedunkeltes Papier (Look während des Drags). |
@@ -58,11 +59,16 @@ Beenden: Ctrl-C im Terminal (wird geloggt). Die App hat kein Dock-Icon (`.access
 | `BoardStore.swift` | Pfade, Laden, atomisches Speichern, Quarantäne, Dateinamen | neu |
 | `BoardLayout.swift` | `LayoutMetrics` (Grid 24, Abstand 12, Rand 48, Kante 220, Kipp 1–2°), Snap, Overlap, Free-Slot-Finder, Drop-Snap, Größen, Zufallskipp | neu, Werte aus board-paper |
 | `StopMotion/*.swift` | `StopMotionClock`, `SplitMix64`, Jitter, `StopMotionPlanner`, `StopMotionSequences` | unverändert aus stopmotion |
+| `EarPlacement.swift` | `EarCorner` (4 Ecken), `EarGeometry` (Eselsohr-Rahmen im visibleFrame, äußere Ecke, Anker fürs Aufblättern), `ExpandDelay` (150/300/500/800 ms, Standard 300) | neu (Schritt 8) |
 | `BoardEditing.swift` | Ansichtsmodus-Logik: Treffer-Test (mit Rotation), Umsortieren/Löschen im Modell, Snap-Ziel, `ViewModeSequences` (Blatt auf/zu, 3 Frames), `BoardStore.moveImageToTrash` | neu (Schritt 7) |
 | **Dropboard** (AppKit/QuartzCore) | | |
 | `main.swift` | Argumente, `--selftest`, `--snapshot`, App-Start (`MainActor.assumeIsolated`) | Muster aus eselsohr-drop |
-| `LaunchOptions.swift`, `DropboardConfig.swift` | Argumente; alle Verhaltens-Konstanten (E8 `dropCloseDelay`, E10 `expandDelay`, Handoff-Default, Eselsohr-Geometrie, Watchdog) | neu / eselsohr-drop |
-| `AppController.swift` | baut die Teile zusammen, System-Beobachter (Spaces, Aktivierung, Bildschirm) | eselsohr-drop |
+| `LaunchOptions.swift`, `DropboardConfig.swift` | Argumente; alle Verhaltens-Konstanten (E8 `dropCloseDelay`, E10 `defaultExpandDelayMs`, `defaultCorner`, Handoff-Default, Eselsohr-Geometrie, Watchdog) | neu / eselsohr-drop |
+| `Settings.swift` | Einstellungen in `UserDefaults.standard`, Keys `dropboard.corner`, `dropboard.expandDelayMs`, `dropboard.launchAtLogin` (Spiegel) | neu (Schritt 8) |
+| `StatusMenu.swift` | `StatusMenuController`: Menüleisten-Symbol (Template, programmatisch gezeichnet) und Menü; `StatusMenuHost` (= AppController) | neu (Schritt 8) |
+| `HotKey.swift` | `GlobalHotKey` (Carbon `RegisterEventHotKey`, ohne Berechtigung), `HideHotKey` (⌃⌥⌘E) | neu (Schritt 8) |
+| `LoginItem.swift` | „Beim Anmelden starten“ über `SMAppService.mainApp` | neu (Schritt 8) |
+| `AppController.swift` | baut die Teile zusammen, System-Beobachter (Spaces, Aktivierung, Bildschirm); Aktionen der Menüleiste (Ecke, Verzögerung, Ausblenden, Beenden) | eselsohr-drop |
 | `DragCoordinator.swift` | Zustandsautomat `idle → hovering → expanded → dropClosing/collapsing → idle` und `idle → viewing → viewClosing → idle`, Expand-Timer, Watchdog, Maus-Weiterleitung | eselsohr-drop/AppController |
 | `BoardPresenter.swift` | Panels, Handoff two-panels/grow, Öffnen/Zuklappen (Realtime), sofortiges Schließen; Ansichtsmodus öffnen/schließen (Stop-Motion, `makeKey`) | eselsohr-drop |
 | `BoardController.swift` | Dokument, Platzierung (Quick-Drop/Cursor), Platzhalter → Bild, Speichern; Treffer, Ziehen, Umsortieren, Löschen | neu |
@@ -75,13 +81,13 @@ Beenden: Ctrl-C im Terminal (wird geloggt). Die App hat kein Dock-Icon (`.access
 | `ViewModeController.swift` | Ansichtsmodus: Öffnen/Schließen, Auswahl, direktes Ziehen, Snap, Löschen, lokaler Key-Monitor, `[VIEW]`-Logs; `ViewModeStyle` | neu (Schritt 7) |
 | `PaperStyle.swift`, `PaperArt.swift` | Look-Konstanten; Noise-Kachel/-Tiling, Eselsohr-Bitmap, Demo-Bilder, PNG-Export | board-paper |
 | `Diagnostics.swift`, `Log.swift` | `[WIN]`/`[FOCUS]`-Logs; Logger, FileProbe | eselsohr-drop |
-| `Snapshot.swift`, `SelfTest*.swift` | Offscreen-PNG; Selftest (`SelfTestViewMode.swift` = Teil 4, Ansichtsmodus) | neu / stopmotion |
+| `Snapshot.swift`, `SelfTest*.swift` | Offscreen-PNG (Eselsohr in der gespeicherten Ecke); Selftest (`SelfTestViewMode.swift` = Teil 4, Ansichtsmodus; `SelfTestSettings.swift` = Teil 5, Ecken/Einstellungen) | neu / stopmotion |
 
 ### Realtime vs. Stop-Motion
 
 | Pfad | Typ | Wann | Wie |
 |---|---|---|---|
-| Realtime | `RealtimeMotion.reveal/collapse` | Aufblättern nach 300 ms Drag-Hover; Zuklappen ohne Drop | Maske auf dem Papier-Layer, Scale 0.001 ↔ 1 um die Eselsohr-Ecke, 200 ms, easeOut, kein Bounce. Maske wird danach entfernt. Reduce Motion: sofort. |
+| Realtime | `RealtimeMotion.reveal/collapse` | Aufblättern nach `Settings.expandDelayMs` (Standard 300 ms) Drag-Hover; Zuklappen ohne Drop | Maske auf dem Papier-Layer, Scale 0.001 ↔ 1 um die Eselsohr-Ecke, 200 ms, easeOut, kein Bounce. Maske wird danach entfernt. Reduce Motion: sofort. |
 | keine Animation | `StopMotion.setModel` | Quick-Drop, Laden | Model-Wert hart gesetzt. |
 | Stop-Motion | `StopMotion.apply` + `StopMotionSequences.drop` | nach dem Drop aufs Board | 2 Frames à 1/6 s (groß ohne Kipp + Jitter, dann final mit Kipp), `CAKeyframeAnimation` `.discrete`, Start sofort (E1). Board schließt nach `dropCloseDelay` ≈ 333 ms (E8). Reduce Motion: 1 Frame, schließt sofort. |
 
@@ -114,6 +120,61 @@ braucht Bedienungshilfen-Berechtigung, verworfen; (3) `NSApp.activate()` nur fü
 die Ursprungs-App reaktivieren – echter Fokusraub (Menüleiste wechselt, Vollbild-Space-Risiko laut Report 02), nur als
 letzter Ausweg. Umgesetzt ist (1) als Rückfall, (3) nicht.
 
+## Menüleiste und Einstellungen (Schritt 8)
+
+Ein Menüleisten-Symbol (Blatt mit Eselsohr, Template-Bild, folgt hell/dunkel der Menüleiste) macht die App ohne
+Terminal bedienbar. Ein Klick öffnet das Menü; jede Einstellung ist ein weiterer Klick und wirkt sofort.
+Nur Systemmenü-Darstellung (Häkchen), keine eigenen Farben, kein Systemblau in eigener UI. Die App wird dabei
+nicht aktiviert (⚠️ VERIFIZIEREN, Test 8).
+
+| Eintrag | Wirkung |
+|---|---|
+| Board öffnen | Ansichtsmodus – derselbe Weg wie ein Klick aufs Eselsohr (`DragCoordinator.openViewing`). Ist das Eselsohr ausgeblendet, liegt es für die Dauer des Ansichtsmodus als Ecke über dem Board (zum Schließen per Klick) und verschwindet danach wieder. |
+| Eselsohr ausblenden (⌃⌥⌘E) | Häkchen = ausgeblendet. `orderOut` des Eselsohr-Panels (nicht `sharingType`, Report 02); Drags aufs Eselsohr gehen dann nicht. **Nicht gespeichert:** nach jedem Neustart ist es wieder sichtbar. Ein offener Ansichtsmodus/Drag wird vorher ohne Animation beendet. |
+| Ecke ▸ Oben rechts / Oben links / Unten rechts / Unten links | Eselsohr springt sofort in die Ecke: 12 pt seitlich eingerückt, 2 pt unter der Menüleiste bzw. über dem Dock (`visibleFrame`). Die umgeknickte Ecke zeigt zur Bildschirmecke, der Falz zur Mitte; Aufblättern (Realtime und Ansichtsmodus) geht von dieser Ecke aus. Gespeichert. |
+| Verzögerung bis Aufklappen ▸ 150 / 300 (Standard, E10) / 500 / 800 ms | Drag-Hover bis zum Expand; ab dem nächsten Drag. Gespeichert. |
+| Beim Anmelden starten | `SMAppService.mainApp` register/unregister; Häkchen = `status == .enabled`, Strich = `.requiresApproval` (Klick öffnet Systemeinstellungen → Anmeldeobjekte). Außerhalb einer `.app` (`swift run`) deaktiviert: „(nur in Dropboard.app)“. ⚠️ VERIFIZIEREN mit der ad-hoc-signierten App; am besten nur aus `/Applications/Dropboard.app` einschalten (die Registrierung hängt am Bundle-Ort). |
+| Board-Ordner im Finder zeigen | `NSWorkspace.activateFileViewerSelecting` auf den Board-Ordner (Finder kommt nach vorn, gewollt). |
+| Über Dropboard ▸ | Untermenü: „Dropboard <Version> (Build <n>)“ aus der Info.plist, sonst „dev“; „Protokoll im Finder zeigen“. Bewusst kein Über-Fenster: das müsste die App aktivieren. |
+| Dropboard beenden (⌘Q) | `NSApp.terminate`. ⌘Q greift nur bei offenem Menü (die App ist nie aktiv). |
+
+**Hotkey ⌃⌥⌘E** (fest, kein Recorder): Carbon `RegisterEventHotKey` + `InstallEventHandler`
+(kEventClassKeyboard/kEventHotKeyPressed) – braucht weder Bedienungshilfen noch Eingabeüberwachung
+(⚠️ VERIFIZIEREN). Nicht ⌥⌘D: das ist der System-Kurzbefehl „Dock ein-/ausblenden“. ⌃⌥⌘E hat keine bekannte
+Systembelegung (⚠️ VERIFIZIEREN unter Systemeinstellungen → Tastatur → Tastaturkurzbefehle). Ist die Kombination
+schon von einer anderen App belegt, steht `registriert=false FEHLER …` im Log; das Menü funktioniert trotzdem.
+Doppelte Auslösung innerhalb 300 ms (Hotkey + Menü-Tastenkürzel bei offenem Menü) wird ignoriert.
+
+**Speicherung:** `UserDefaults.standard`, Keys `dropboard.corner` (`topRight|topLeft|bottomRight|bottomLeft`),
+`dropboard.expandDelayMs` (nur 150/300/500/800, sonst Standard), `dropboard.launchAtLogin` (nur Spiegel des
+`SMAppService`-Status). Domäne in der `.app`: `app.dropboard.Dropboard`; bei `swift run` eine eigene (Prozessname,
+⚠️ VERIFIZIEREN) – Einstellungen aus `swift run` und `.app` sind getrennt. Lesen/Zurücksetzen:
+
+```sh
+defaults read app.dropboard.Dropboard                 # .app
+defaults delete app.dropboard.Dropboard dropboard.corner
+```
+
+### Testschritte Menüleiste (Tag `[SETTINGS]`)
+
+| # | Aktion | Erwartet (Log) | Prüfen (Auge) |
+|---|---|---|---|
+| 8 | Start (`swift run Dropboard` bzw. `open dist/Dropboard.app`) | `[SETTINGS] Start ecke=topRight verzögerung=300ms anmeldung(spiegel)=false version=dev …` (`.app`: `version=<X> (Build <n>) anmeldung=notRegistered`; `swift run`: `anmeldung=nur in Dropboard.app (…)`), `[SETTINGS] Menüleisten-Symbol angelegt button=true image=true template=true`, `[SETTINGS] Hotkey ⌃⌥⌘E (Eselsohr ausblenden) registriert=true (Carbon RegisterEventHotKey, ohne Berechtigung)` | Symbol in der Menüleiste (hell/dunkel passend); **keine** Berechtigungsabfrage; Klick öffnet das Menü, Menüleiste bleibt bei der vorderen App, kein `!!! DROPBOARD SELBST AKTIVIERT` |
+| 8b | Menü → Board öffnen | `[SETTINGS] Menü: Board öffnen`, `[FOCUS] vor Board öffnen (Menü) …`, `[VIEW] Ansichtsmodus geöffnet grund=Menüleiste …` | wie Test 7; Esc oder Klick aufs Eselsohr schließt (7c/7d). **Befund**, falls Esc nicht ankommt (`boardKey=false`, kein Klick vorher) |
+| 8c | ⌃⌥⌘E (TextEdit vorn), dann nochmal | `[SETTINGS] Eselsohr ausgeblendet quelle=Hotkey ⌃⌥⌘E visible=false (nicht gespeichert; …)`, dann `… eingeblendet … visible=true` | Eselsohr weg/wieder da; TextEdit bleibt vorn; Screenshot (⌘⇧3) ohne Eselsohr |
+| 8d | Menü → Eselsohr ausblenden | `quelle=Menü`; Menü erneut öffnen: Häkchen gesetzt, rechts `⌃⌥⌘E` | wie 8c |
+| 8e | ausgeblendet, App beenden und neu starten | kein Ausblenden-Eintrag; `[WIN] Start ear … visible=true` | Eselsohr wieder sichtbar |
+| 8f | Ecke → je Unten links, Unten rechts, Oben links, Oben rechts | `[SETTINGS] Ecke topRight → bottomLeft ear=(12,<dock+2> 40x40) visibleFrame=(…) …`, `[WIN] Ecke geändert ear …` | Eselsohr sofort in der Ecke, 12 pt seitlich, knapp über dem Dock bzw. unter der Menüleiste; umgeknickte Ecke zeigt zur Bildschirmecke |
+| 8g | je Ecke: Drag-Hover (5) und Klick (7) | wie 5/7 | Papier blättert **aus der gewählten Ecke** auf und klappt dorthin zu |
+| 8h | Ecke wählen, App neu starten | `[SETTINGS] Start ecke=<gewählt> …` | Eselsohr in der gespeicherten Ecke; `--snapshot` schreibt `…-ear.png` gespiegelt (`ecke=<gewählt>`) |
+| 8i | Verzögerung → 800 ms, dann Drag aufs Eselsohr | `[SETTINGS] Verzögerung bis Aufklappen 300ms → 800ms (ab dem nächsten Drag)`, `[HANDOFF] draggingEntered win=ear … → Expand-Timer 800ms` | Board öffnet spürbar später; Neustart: `verzögerung=800ms` |
+| 8j | Beim Anmelden starten (aus `/Applications/Dropboard.app`) | `[SETTINGS] Beim Anmelden starten → true ok status=notRegistered→enabled app=/Applications/Dropboard.app` (oder `→requiresApproval` + Systemeinstellungen öffnen sich; oder `FEHLER …` – dann bleibt das Häkchen aus) | Häkchen; Eintrag unter Systemeinstellungen → Allgemein → Anmeldeobjekte; ab-/anmelden: Dropboard startet. Ausschalten: `→ false ok status=enabled→notRegistered` |
+| 8k | Beim Anmelden starten unter `swift run` | – | Eintrag grau „(nur in Dropboard.app)“ |
+| 8l | Board-Ordner im Finder zeigen | `[SETTINGS] Board-Ordner im Finder zeigen …/Boards/default` | Finder mit markiertem Ordner `default` |
+| 8m | Über Dropboard | – | Untermenü „Dropboard <Version> (Build <n>)“ bzw. „Dropboard dev“ |
+| 8n | Dropboard beenden | `[SETTINGS] Dropboard beenden (Menüleiste)` | Eselsohr und Symbol weg, Prozess beendet (`pgrep Dropboard` leer) |
+| 8o | Hotkey-Konflikt (optional) | andere App mit ⌃⌥⌘E belegen, Dropboard starten: `registriert=false FEHLER RegisterEventHotKey OSStatus=-9878 (… belegt)` | Menü-Schalter funktioniert weiter |
+
 ## Manuelle Tests gegen die Interaktionstabelle
 
 Vorher: Log mitlaufen lassen (`tail -f ~/Library/Logs/Dropboard/dropboard.log`). Je Test notieren: wer, Datum,
@@ -121,7 +182,7 @@ macOS-Version, Ergebnis, Logzeilen. Die erwarteten Zeilen sind Hypothesen, Abwei
 
 | # | Zeile der Interaktionstabelle / Schritt | Aktion | Erwartet (Log) | Prüfen (Auge) |
 |---|---|---|---|---|
-| 0 | Selftest/Snapshot | `swift run Dropboard --selftest`; `--snapshot /tmp/db.png --snapshot-demo`, dann mit `--snapshot-dimmed` | `143/143 PASS` (96 + 47 `view:`), Exit 0; `[WIN] Snapshot Board geschrieben … items=5`, `[WIN] Snapshot Eselsohr geschrieben …-ear.png` | PNG: Off-White + Noise, harte Schatten 1–2 px unten rechts, Kipp ±1–2°, ein leeres Platzhalter-Rechteck, Eselsohr als Papiereck |
+| 0 | Selftest/Snapshot | `swift run Dropboard --selftest`; `--snapshot /tmp/db.png --snapshot-demo`, dann mit `--snapshot-dimmed` | `185/185 PASS` (96 + 47 `view:` + 42 `settings:`), Exit 0; `[WIN] Snapshot Board geschrieben … items=5`, `[WIN] Snapshot Eselsohr geschrieben …-ear.png` | PNG: Off-White + Noise, harte Schatten 1–2 px unten rechts, Kipp ±1–2°, ein leeres Platzhalter-Rechteck, Eselsohr als Papiereck |
 | 1 | Eselsohr (Schritt 1) | Start | `[WIN] Start Dropboard handoff=two-panels …`, `[WIN] Start ear … level=25 … visible=true`, `[WIN] Start board … visible=false`, `[FOCUS] Start … NSApp.isActive=false`, `[STORE] geladen items=…` | ca. 40 pt oben rechts, 12 pt eingerückt, knapp unter der Menüleiste, gedämpft, ohne Schatten, kein Dock-Icon |
 | 1b | Eselsohr still | beliebigen Drag starten, nicht aufs Eselsohr | keine Zeile | keine Reaktion, keine Idle-Animation |
 | 1c | über allen Fenstern | Space wechseln; Safari nativ Vollbild | `[WIN] Space-Wechsel ear … onActiveSpace=true visible=true` | Eselsohr auf jedem Space und über der Vollbild-App |

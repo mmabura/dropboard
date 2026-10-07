@@ -12,16 +12,21 @@ enum DropboardConfig {
     /// T4 offen: per Startargument `--handoff grow` oder hier umschalten.
     static let defaultHandoff: HandoffMode = .twoPanels
 
-    /// E10: Drag-Hover auf dem Eselsohr bis zum Expand.
-    static let expandDelay: TimeInterval = 0.3
+    /// E10: Drag-Hover auf dem Eselsohr bis zum Expand – nur noch der STANDARD. Der tatsächliche Wert kommt aus
+    /// `Settings.expandDelayMs` (Menüleiste → „Verzögerung bis Aufklappen“, erlaubt: `ExpandDelay.choicesMs`).
+    static let defaultExpandDelayMs: Int = ExpandDelay.defaultMs
     /// E8: Board bleibt für die 2 Drop-Frames sichtbar (2 × 1/6 s ≈ 333 ms), dann schließt es.
     /// Mit „Bewegung reduzieren“ schließt es sofort.
     static let dropCloseDelay: TimeInterval = 2 * StopMotionClock.frameDuration
 
     // Eselsohr (Werte wie Spike eselsohr-drop)
     static let earSize: CGFloat = 40
-    static let earInsetRight: CGFloat = 12
-    static let earTopGap: CGFloat = 2
+    /// Horizontale Einrückung vom linken/rechten Bildschirmrand (Briefing: „etwas vom Rand eingerückt“).
+    static let earInset: CGFloat = 12
+    /// Vertikaler Abstand zur Menüleiste (oben) bzw. zum Dock/unteren Rand (unten), jeweils am visibleFrame.
+    static let earEdgeGap: CGFloat = 2
+    /// Standard-Ecke (Briefing: „oben rechts“). Die tatsächliche Ecke kommt aus `Settings.corner` (Menüleiste → „Ecke“).
+    static let defaultCorner: EarCorner = .topRight
 
     // Watchdog, solange das Board während eines Drags offen ist (wie Spike)
     static let pollInterval: TimeInterval = 0.02
@@ -38,15 +43,14 @@ enum DropboardConfig {
     static let viewDragThreshold: CGFloat = 3
 }
 
-/// Rahmen aus der Bildschirmgeometrie (Eselsohr-Position wie Spike: visibleFrame, rechts eingerückt,
-/// knapp unter der Menüleiste). MainActor, weil NSScreen/NSEvent dort benutzt werden (wie in den Spikes).
+/// Rahmen aus der Bildschirmgeometrie (Eselsohr-Position: visibleFrame, seitlich eingerückt, knapp unter der
+/// Menüleiste bzw. über dem Dock; reine Geometrie in DropboardCore.EarGeometry, Selftest für alle 4 Ecken).
+/// MainActor, weil NSScreen/NSEvent dort benutzt werden (wie in den Spikes).
 @MainActor
 enum ScreenGeometry {
-    static func earFrame(_ screen: NSScreen) -> NSRect {
-        let vf = screen.visibleFrame
-        return NSRect(x: vf.maxX - DropboardConfig.earInsetRight - DropboardConfig.earSize,
-                      y: vf.maxY - DropboardConfig.earTopGap - DropboardConfig.earSize,
-                      width: DropboardConfig.earSize, height: DropboardConfig.earSize)
+    static func earFrame(_ screen: NSScreen, corner: EarCorner) -> NSRect {
+        EarGeometry.earFrame(visibleFrame: screen.visibleFrame, corner: corner, size: DropboardConfig.earSize,
+                             inset: DropboardConfig.earInset, gap: DropboardConfig.earEdgeGap)
     }
 
     /// Board deckt den ganzen Bildschirm ab (wie Spike).

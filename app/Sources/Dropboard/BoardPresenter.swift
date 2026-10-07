@@ -7,6 +7,9 @@ import DropboardCore
 /// Nie NSApp.activate / makeKeyAndOrderFront: nur orderFrontRegardless/orderOut (Report 02).
 /// Ansichtsmodus (Schritt 7): `openForViewing`/`closeViewing` mit dem Stop-Motion-Pfad (StopMotionSheet, 3 Frames),
 /// ohne Abdunklung; das Board-Panel wird dafür key (makeKey), die App wird nicht aktiviert.
+/// Schritt 8: Eselsohr in einer von vier Ecken (`corner`, aus Settings); Aufblättern/Zuklappen gehen immer von der
+/// äußeren Ecke des Eselsohrs aus. Ausblenden (`setEarHidden`) = orderOut des Eselsohr-Panels (Report 02: nicht
+/// über sharingType), nicht gespeichert.
 @MainActor
 final class BoardPresenter {
     let handoff: HandoffMode
@@ -26,15 +29,20 @@ final class BoardPresenter {
     private(set) var isOpen = false
     /// Ansichtsmodus offen (Board per Klick geöffnet, nicht per Drag)
     private(set) var isViewing = false
+    /// Ecke des Eselsohrs (Settings.corner); Änderung über `setCorner(_:screen:)`.
+    private(set) var corner: EarCorner
+    /// Eselsohr per Hotkey/Menü ausgeblendet (nicht gespeichert)
+    private(set) var earHidden = false
     private var closeToken = 0
 
-    init(handoff: HandoffMode, screen: NSScreen, scene: BoardScene, noiseTile: CGImage?) {
+    init(handoff: HandoffMode, screen: NSScreen, corner: EarCorner, scene: BoardScene, noiseTile: CGImage?) {
         // Nur lokale Werte benutzen, bis alle gespeicherten Eigenschaften gesetzt sind.
-        let earFrame = ScreenGeometry.earFrame(screen)
+        let earFrame = ScreenGeometry.earFrame(screen, corner: corner)
         let boardFrame = ScreenGeometry.boardFrame(screen)
         let earLayer = CALayer()
         let growRoot = CALayer()
         self.handoff = handoff
+        self.corner = corner
         self.scene = scene
         self.noiseTile = noiseTile
         self.earFrame = earFrame
@@ -76,6 +84,17 @@ final class BoardPresenter {
         ear.orderFrontRegardless()
     }
 
+    /// Ausblenden/Einblenden (Hotkey, Menüleiste). Ausgeblendet = orderOut: keine Drags aufs Eselsohr möglich.
+    /// Der Aufrufer beendet vorher einen offenen Ansichtsmodus/Drag (DragCoordinator.endAllImmediately).
+    func setEarHidden(_ hidden: Bool) {
+        earHidden = hidden
+        if hidden {
+            ear.orderOut(nil)
+        } else {
+            ear.orderFrontRegardless()
+        }
+    }
+
     // MARK: Koordinaten
 
     /// Bildschirmpunkt → Board-Koordinaten (oben links, y nach unten).
@@ -83,9 +102,10 @@ final class BoardPresenter {
         CGPoint(x: p.x - boardFrame.minX, y: boardFrame.maxY - p.y)
     }
 
-    /// Eselsohr-Ecke (oben rechts) in Layer-Koordinaten des Papiers: Anker für Aufblättern/Zuklappen.
+    /// Äußere Eselsohr-Ecke (je nach `corner`) in Layer-Koordinaten des Papiers: Anker für Aufblättern/Zuklappen
+    /// (RealtimeMotion und StopMotionSheet). Reine Geometrie in DropboardCore.EarGeometry (Selftest).
     private var anchor: CGPoint {
-        CGPoint(x: earFrame.maxX - boardFrame.minX, y: earFrame.maxY - boardFrame.minY)
+        EarGeometry.anchor(earFrame: earFrame, corner: corner, boardFrame: boardFrame)
     }
 
     // MARK: Öffnen / Schließen
@@ -154,6 +174,8 @@ final class BoardPresenter {
         scene.setDimmed(false)
         isOpen = false
         isViewing = false
+        // Ansichtsmodus aus dem Menü bei ausgeblendetem Eselsohr: das Eselsohr lag als Ecke über dem Board → wieder weg.
+        if earHidden { ear.orderOut(nil) }
     }
 
     // MARK: Ansichtsmodus (Schritt 7, Stop-Motion-Pfad)
@@ -197,6 +219,7 @@ final class BoardPresenter {
             StopMotionSheet.play(plan, on: scene.sheet, anchor: anchor, removeMaskAfter: true)
             ear.setFrame(boardFrame, display: true)
             withoutImplicitAnimations { growRoot.frame = CGRect(origin: .zero, size: boardFrame.size) }
+            if earHidden { ear.orderFrontRegardless() }   // grow: das Eselsohr-Panel ist das Board
             ear.makeKey()   // ⚠️ VERIFIZIEREN: wie oben (grow: das Eselsohr-Panel ist das Board)
         }
         return plan
@@ -236,9 +259,15 @@ final class BoardPresenter {
 
     // MARK: Bildschirmwechsel
 
+    /// Neue Ecke (Menüleiste): Eselsohr sofort versetzen und neu zeichnen (Falz zeigt zur Bildschirmmitte).
+    func setCorner(_ newCorner: EarCorner, screen: NSScreen) {
+        corner = newCorner
+        relayout(screen: screen)
+    }
+
     func relayout(screen: NSScreen) {
         if isOpen { closeImmediately() }
-        earFrame = ScreenGeometry.earFrame(screen)
+        earFrame = ScreenGeometry.earFrame(screen, corner: corner)
         boardFrame = ScreenGeometry.boardFrame(screen)
         usableArea = ScreenGeometry.usableArea(screen, metrics: LayoutMetrics.standard)
         scene.resize(size: boardFrame.size, scale: screen.backingScaleFactor)
@@ -252,7 +281,7 @@ final class BoardPresenter {
         withoutImplicitAnimations {
             earLayer.frame = CGRect(origin: .zero, size: size)
             earLayer.contentsScale = scale
-            earLayer.contents = PaperArt.earImage(size: size, scale: scale, noiseTile: noiseTile)
+            earLayer.contents = PaperArt.earImage(size: size, scale: scale, noiseTile: noiseTile, corner: corner)
             earLayer.opacity = PaperStyle.earOpacity   // gedämpft, kein Schatten
             if handoff == .grow && !isOpen { growRoot.frame = CGRect(origin: .zero, size: size) }
         }

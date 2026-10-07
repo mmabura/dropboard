@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import DropboardCore
 
 /// Vorgerenderte Bitmaps: Noise-Kachel, gekachelte Noise, Eselsohr, Demo-Platzhalterbilder.
 /// Alles wird einmal erzeugt und als `contents` statischer Layer gesetzt (kein Zeichnen zur Laufzeit).
@@ -25,19 +26,27 @@ enum PaperArt {
 
     /// Eselsohr als umgeknicktes Papiereck: sichtbar ist die Lasche (Dreieck mit rechtem Winkel unten links,
     /// Falz von oben links nach unten rechts), das Dreieck oben rechts ist „weg“ (transparent).
+    /// Gezeichnet wird immer für `.topRight`; für die anderen Ecken wird der Kontext gespiegelt (links: x, unten: y),
+    /// damit die weggeknickte Ecke zur Bildschirmecke und der rechte Winkel der Lasche zur Bildschirmmitte zeigt.
     /// Die Lasche zeigt die Papier-Rückseite (etwas dunkler und kühler als das Board), mit derselben Noise, Falzband,
     /// Falzlinie und hellem Haarstrich; kein Schatten.
     // ⚠️ VERIFIZIEREN: CGMutablePath, clip(), strokePath() und setAlpha() kommen in keinem Spike vor
     // (Standard-CoreGraphics). Prüfen per `--snapshot`: Datei `<pfad>-ear.png`.
     // ⚠️ VERIFIZIEREN: Falzband und heller Haarstrich (Clip + Strokes, Offset um 1 pt) sind rein rechnerisch ausgelegt,
     // Wirkung auf dem Mac im Snapshot prüfen (ob die Lasche als Rückseite einer Papierecke liest).
-    static func earImage(size: CGSize, scale: CGFloat, noiseTile: CGImage?) -> CGImage? {
+    // ⚠️ VERIFIZIEREN: Spiegeln per translateBy/scaleBy(-1) vor dem Zeichnen (auch die gekachelte Noise wird
+    // gespiegelt – unkritisch). Prüfen: `--snapshot` mit gesetzter Ecke (`defaults write … dropboard.corner bottomLeft`).
+    static func earImage(size: CGSize, scale: CGFloat, noiseTile: CGImage?, corner: EarCorner = .topRight) -> CGImage? {
         let w = Int((size.width * scale).rounded()), h = Int((size.height * scale).rounded())
         guard w > 0, h > 0, let cs = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return nil }
         let W = CGFloat(w), H = CGFloat(h)
+
+        // Bitmap-Kontext: y nach oben. Links → horizontal spiegeln, unten → vertikal spiegeln.
+        ctx.translateBy(x: corner.isRight ? 0 : W, y: corner.isTop ? 0 : H)
+        ctx.scaleBy(x: corner.isRight ? 1 : -1, y: corner.isTop ? 1 : -1)
 
         let flap = CGMutablePath()
         flap.move(to: CGPoint(x: 0, y: H))

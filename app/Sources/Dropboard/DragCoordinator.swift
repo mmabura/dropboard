@@ -3,13 +3,13 @@ import DropboardCore
 
 /// Zustandsautomat für Drag-Sessions auf Eselsohr und Board (Logik aus Spike eselsohr-drop/AppController).
 ///
-///   idle ──draggingEntered(ear, Bild)──▶ hovering ──300 ms (E10)──▶ expanded ──performDrop(board)──▶ dropClosing ──dropCloseDelay──▶ idle
+///   idle ──draggingEntered(ear, Bild)──▶ hovering ──Settings.expandDelayMs (E10: 300 ms)──▶ expanded ──performDrop(board)──▶ dropClosing ──dropCloseDelay──▶ idle
 ///                                          │ performDrop(ear) = Quick-Drop ▶ idle          │ Exit/Ende/Esc ohne Drop
 ///                                          │ draggingExited ▶ idle                         ▼
 ///                                                                                       collapsing ──200 ms Realtime──▶ idle
 ///
 /// Ansichtsmodus (Schritt 7, Details in ViewModeController):
-///   idle ──Klick aufs Eselsohr──▶ viewing ──Esc / Klick aufs Eselsohr──▶ viewClosing ──3 Frames Stop-Motion──▶ idle
+///   idle ──Klick aufs Eselsohr / Menüleiste „Board öffnen“──▶ viewing ──Esc / Klick aufs Eselsohr──▶ viewClosing ──3 Frames Stop-Motion──▶ idle
 ///   In `viewing` landet ein fremder Drag (Bild) auf Eselsohr oder Board per Drop an Cursor; das Board bleibt offen.
 @MainActor
 final class DragCoordinator: NSObject {
@@ -22,6 +22,8 @@ final class DragCoordinator: NSObject {
     private let importer: ImageImporter
     private let motion: MotionPreferences
     private let diagnostics: Diagnostics
+    /// Schritt 8: Verzögerung bis zum Expand kommt aus den Einstellungen (wirkt ab dem nächsten Drag).
+    private let settings: Settings
     private let viewMode: ViewModeController
     private(set) var phase: Phase = .idle
 
@@ -41,12 +43,13 @@ final class DragCoordinator: NSObject {
     private var viewDragAccepts = false
 
     init(presenter: BoardPresenter, board: BoardController, importer: ImageImporter,
-         motion: MotionPreferences, diagnostics: Diagnostics) {
+         motion: MotionPreferences, diagnostics: Diagnostics, settings: Settings) {
         self.presenter = presenter
         self.board = board
         self.importer = importer
         self.motion = motion
         self.diagnostics = diagnostics
+        self.settings = settings
         viewMode = ViewModeController(presenter: presenter, board: board, motion: motion, diagnostics: diagnostics)
         super.init()
         viewMode.coordinator = self
@@ -61,8 +64,7 @@ final class DragCoordinator: NSObject {
             guard view.role == .ear else { return }
             Log.line("[WIN]", "Klick auf \(name(of: view)) ohne Drag → Ansichtsmodus")
             diagnostics.logFocus("nach Klick")
-            phase = .viewing
-            viewMode.open(reason: "Klick aufs Eselsohr")
+            openViewing(reason: "Klick aufs Eselsohr")
         case .viewing:
             if presenter.isOnEar(screenPoint: screen) {
                 closeViewing(reason: "Klick aufs Eselsohr")
@@ -84,6 +86,19 @@ final class DragCoordinator: NSObject {
         viewMode.mouseUp(at: presenter.boardPoint(fromScreen: screenPoint(view, event)))
     }
 
+    /// Ansichtsmodus öffnen – gleicher Weg für Klick aufs Eselsohr und Menüleiste „Board öffnen“.
+    /// Rückgabe: geöffnet? (nur aus `idle`)
+    @discardableResult
+    func openViewing(reason: String) -> Bool {
+        guard phase == .idle else {
+            Log.line("[VIEW]", "Ansichtsmodus öffnen ignoriert grund=\(reason) phase=\(phase.rawValue)")
+            return false
+        }
+        phase = .viewing
+        viewMode.open(reason: reason)
+        return true
+    }
+
     /// Esc (über ViewModeController) oder Klick aufs Eselsohr.
     func closeViewing(reason: String) {
         guard phase == .viewing else { return }
@@ -99,6 +114,26 @@ final class DragCoordinator: NSObject {
         guard phase == .viewing || phase == .viewClosing else { return }
         viewMode.endImmediately(reason: reason)
         phase = .idle
+    }
+
+    /// Schritt 8 (Ecke wechseln, Eselsohr ausblenden): alles ohne Animation beenden – Ansichtsmodus wie oben, ein
+    /// laufender Drag-Zustand (hovering/expanded/collapsing/dropClosing) wird abgebrochen und das Board geschlossen.
+    /// Danach ist die Phase `idle`, damit kein Zuklappen-Completion mehr auf einen alten Rahmen wartet.
+    func endAllImmediately(reason: String) {
+        switch phase {
+        case .idle:
+            return
+        case .viewing, .viewClosing:
+            endViewingImmediately(reason: reason)
+        case .hovering, .expanded, .collapsing, .dropClosing:
+            let was = phase
+            cancelExpand()
+            stopPolling()
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(closeAfterDrop), object: nil)
+            presenter.closeImmediately()
+            phase = .idle
+            Log.line("[HANDOFF]", "abgebrochen grund=\(reason) phase=\(was.rawValue) → idle (ohne Animation)")
+        }
     }
 
     // MARK: Hilfen
@@ -172,7 +207,7 @@ final class DragCoordinator: NSObject {
             return []
         }
         phase = .hovering
-        Log.line("[HANDOFF]", "draggingEntered win=\(win) pos=\(pos) → Expand-Timer \(Int(DropboardConfig.expandDelay * 1000))ms")
+        Log.line("[HANDOFF]", "draggingEntered win=\(win) pos=\(pos) → Expand-Timer \(settings.expandDelayMs)ms")
         scheduleExpand()
         return .copy
     }
@@ -320,7 +355,7 @@ final class DragCoordinator: NSObject {
 
     private func scheduleExpand() {
         cancelExpand()
-        perform(#selector(expandFired), with: nil, afterDelay: DropboardConfig.expandDelay, inModes: [.common])
+        perform(#selector(expandFired), with: nil, afterDelay: settings.expandDelay, inModes: [.common])
     }
 
     private func cancelExpand() {

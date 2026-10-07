@@ -70,19 +70,21 @@ enum Snapshot {
                 + "items=\(scene.itemCount) abgedunkelt=\(scene.isDimmed)")
 
             let earSize = CGSize(width: DropboardConfig.earSize, height: DropboardConfig.earSize)
+            let corner = Settings().corner   // gespeicherte Ecke (Schritt 8), Standard oben rechts
             let earRoot = CALayer()
             let ear = CALayer()
             withoutImplicitAnimations {
                 earRoot.frame = CGRect(origin: .zero, size: earSize)
                 ear.frame = earRoot.frame
                 ear.contentsScale = scale
-                ear.contents = PaperArt.earImage(size: earSize, scale: scale, noiseTile: PaperArt.loadNoiseTile())
+                ear.contents = PaperArt.earImage(size: earSize, scale: scale, noiseTile: PaperArt.loadNoiseTile(),
+                                                 corner: corner)
                 ear.opacity = PaperStyle.earOpacity
                 earRoot.addSublayer(ear)
             }
             let earURL = earSnapshotURL(for: boardURL)
             try renderPNG(earRoot, size: earSize, scale: scale, to: earURL)
-            Log.line("[WIN]", "Snapshot Eselsohr geschrieben \(earURL.path)")
+            Log.line("[WIN]", "Snapshot Eselsohr geschrieben \(earURL.path) ecke=\(corner.rawValue)")
             return true
         } catch {
             Log.line("[WIN]", "Snapshot FEHLER: \(error)")

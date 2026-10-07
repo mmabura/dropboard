@@ -8,11 +8,17 @@ import DropboardCore
 ///   ImageImporter       – Drop-Annahme (Promise → fileURL → Bilddaten → URL)
 ///   BoardPresenter      – Panels, Handoff, Realtime-Öffnen/Schließen
 ///   DragCoordinator     – Zustandsautomat der Drag-Session und des Ansichtsmodus (ViewModeController)
+///   Settings            – Ecke, Verzögerung, Login-Spiegel (UserDefaults, Schritt 8)
+///   StatusMenuController – Menüleisten-Symbol + Menü; GlobalHotKey – Ausblenden-Hotkey (Carbon)
 @MainActor
-final class AppController: NSObject, NSApplicationDelegate {
+final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
     private let options: LaunchOptions
     private let store: BoardStore
     private let motion: MotionPreferences
+    private let settings: Settings
+    private var statusMenu: StatusMenuController?
+    private var hideHotKey: GlobalHotKey?
+    private var lastHideToggle: TimeInterval = -1
     private var scene: BoardScene?
     private var boardController: BoardController?
     private var importer: ImageImporter?
@@ -24,6 +30,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         self.options = options
         store = BoardStore(boardDirectory: options.boardDirectory ?? BoardStore.defaultBoardDirectory())
         motion = MotionPreferences(forced: options.forceReduceMotion)
+        settings = Settings()
         super.init()
     }
 
@@ -38,14 +45,15 @@ final class AppController: NSObject, NSApplicationDelegate {
         let scale = screen.backingScaleFactor
         let noise = PaperArt.loadNoiseTile()
         let scene = BoardScene(size: screen.frame.size, scale: scale, noiseTile: noise)
-        let presenter = BoardPresenter(handoff: options.handoff, screen: screen, scene: scene, noiseTile: noise)
+        let presenter = BoardPresenter(handoff: options.handoff, screen: screen, corner: settings.corner,
+                                       scene: scene, noiseTile: noise)
         let board = BoardController(store: store, scene: scene, usableArea: presenter.usableArea,
                                     seed: UInt64(Date().timeIntervalSince1970 * 1000))
         let importer = ImageImporter(store: store, scale: scale)
         importer.sink = board
         let diagnostics = Diagnostics(presenter: presenter)
         let coordinator = DragCoordinator(presenter: presenter, board: board, importer: importer,
-                                          motion: motion, diagnostics: diagnostics)
+                                          motion: motion, diagnostics: diagnostics, settings: settings)
         presenter.attach(coordinator)
         self.scene = scene
         self.presenter = presenter
@@ -59,6 +67,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         presenter.showEar()   // nie makeKeyAndOrderFront / NSApp.activate (Report 02)
         diagnostics.logWindows("Start")
         diagnostics.logFocus("Start")
+        setUpMenuBarAndHotKey()
 
         let ws = NSWorkspace.shared.notificationCenter
         ws.addObserver(self, selector: #selector(activeSpaceChanged(_:)),
@@ -78,7 +87,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         Log.line("[WIN]", "Bildschirme=\(NSScreen.screens.count) frame=\(fmt(screen.frame)) visibleFrame=\(fmt(screen.visibleFrame)) "
             + "backingScale=\(screen.backingScaleFactor) safeAreaTop=\(screen.safeAreaInsets.top)")
         Log.line("[MOTION]", "Bewegung reduzieren: system=\(motion.system) forced=\(motion.forced) effective=\(motion.effective) "
-            + "expandDelay=\(Int(DropboardConfig.expandDelay * 1000))ms dropCloseDelay=\(Int((DropboardConfig.dropCloseDelay * 1000).rounded()))ms")
+            + "expandDelay=\(settings.expandDelayMs)ms dropCloseDelay=\(Int((DropboardConfig.dropCloseDelay * 1000).rounded()))ms")
         Log.line("[STORE]", "Board-Ordner=\(store.boardDirectory.path) ablage=\(fmt(presenter?.usableArea ?? .zero))")
         Log.line("[DROP]", "registriert=[\(ImageImporter.acceptedTypes.map { $0.rawValue }.joined(separator: ","))]")
     }
@@ -107,5 +116,89 @@ final class AppController: NSObject, NSApplicationDelegate {
         Log.line("[WIN]", "Bildschirmparameter geändert Bildschirme=\(NSScreen.screens.count) frame=\(fmt(screen.frame)) "
             + "backingScale=\(screen.backingScaleFactor)")
         diagnostics?.logWindows("Bildschirm-Wechsel")
+    }
+
+    // MARK: Menüleiste und Einstellungen (Schritt 8)
+
+    private func setUpMenuBarAndHotKey() {
+        statusMenu = StatusMenuController(settings: settings, host: self)
+        let loginText: String
+        if LoginItem.isAppBundle {
+            let status = LoginItem.status
+            settings.launchAtLogin = status == .enabled   // Spiegel nachziehen (Wahrheit: SMAppService)
+            loginText = LoginItem.describe(status)
+        } else {
+            loginText = "nur in Dropboard.app (läuft aus \(Bundle.main.bundleURL.path))"
+        }
+        Log.line("[SETTINGS]", "Start \(settings.summary) version=\(StatusMenuController.versionText) "
+            + "anmeldung=\(loginText) ear=\(fmt(presenter?.earFrame ?? .zero))")
+        Log.line("[SETTINGS]", "Menüleisten-Symbol angelegt \(statusMenu?.diagnosticsText ?? "fehlt")")
+
+        let hotKey = GlobalHotKey(id: 1) { [weak self] in
+            self?.toggleEarHidden(source: "Hotkey \(HideHotKey.display)")
+        }
+        let result = hotKey.register(keyCode: HideHotKey.keyCode, modifiers: HideHotKey.carbonModifiers)
+        hideHotKey = hotKey
+        Log.line("[SETTINGS]", "Hotkey \(HideHotKey.display) (Eselsohr ausblenden) registriert=\(result.ok)"
+            + (result.ok ? "" : " FEHLER \(result.status)") + " (Carbon RegisterEventHotKey, ohne Berechtigung)")
+    }
+
+    var isEarHidden: Bool { presenter?.earHidden ?? false }
+
+    func openBoardFromMenu() {
+        guard let coordinator = coordinator else { return }
+        diagnostics?.logFocus("vor Board öffnen (Menü)")
+        coordinator.openViewing(reason: "Menüleiste")
+    }
+
+    func toggleEarHidden(source: String) {
+        guard let presenter = presenter else { return }
+        let now = Log.now
+        if now - lastHideToggle < HideHotKey.debounce {
+            Log.line("[SETTINGS]", "Ausblenden doppelt ausgelöst quelle=\(source) → ignoriert (<\(Int(HideHotKey.debounce * 1000))ms)")
+            return
+        }
+        lastHideToggle = now
+        let hide = !presenter.earHidden
+        if hide { coordinator?.endAllImmediately(reason: "Eselsohr ausgeblendet") }
+        presenter.setEarHidden(hide)
+        Log.line("[SETTINGS]", "Eselsohr \(hide ? "ausgeblendet" : "eingeblendet") quelle=\(source) "
+            + "visible=\(presenter.ear.isVisible) (nicht gespeichert; nach Neustart sichtbar)")
+        statusMenu?.refresh()
+    }
+
+    func applyCorner(_ corner: EarCorner) {
+        guard let presenter = presenter else { return }
+        let old = settings.corner
+        settings.corner = corner
+        coordinator?.endAllImmediately(reason: "Ecke geändert")
+        let screen = presenter.ear.screen ?? ScreenGeometry.screenUnderMouse()
+        presenter.setCorner(corner, screen: screen)
+        boardController?.usableArea = presenter.usableArea
+        Log.line("[SETTINGS]", "Ecke \(old.rawValue) → \(corner.rawValue) ear=\(fmt(presenter.earFrame)) "
+            + "visibleFrame=\(fmt(screen.visibleFrame)) versteckt=\(presenter.earHidden) gespeichert=\(settings.corner == corner)")
+        diagnostics?.logWindows("Ecke geändert")
+    }
+
+    func applyExpandDelay(ms: Int) {
+        let old = settings.expandDelayMs
+        settings.expandDelayMs = ms
+        Log.line("[SETTINGS]", "Verzögerung bis Aufklappen \(old)ms → \(settings.expandDelayMs)ms (ab dem nächsten Drag)")
+    }
+
+    func revealBoardFolder() {
+        Log.line("[SETTINGS]", "Board-Ordner im Finder zeigen \(store.boardDirectory.path)")
+        NSWorkspace.shared.activateFileViewerSelecting([store.boardDirectory])
+    }
+
+    func revealLogFile() {
+        Log.line("[SETTINGS]", "Protokoll im Finder zeigen \(Log.filePath)")
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: Log.filePath)])
+    }
+
+    func quitFromMenu() {
+        Log.line("[SETTINGS]", "Dropboard beenden (Menüleiste)")
+        hideHotKey?.unregister()
+        NSApp.terminate(nil)
     }
 }

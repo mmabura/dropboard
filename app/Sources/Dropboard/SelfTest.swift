@@ -4,7 +4,8 @@ import DropboardCore
 /// `Dropboard --selftest`: Assertions gegen die reine Logik, ohne XCTest und ohne Fenster. Exit 0 = alles PASS.
 /// Teil 1: Stop-Motion-Planer (unverändert aus spikes/stopmotion/Sources/stopmotion-demo/SelfTest.swift).
 /// Teil 2: Layout (Grid-Snap, Free-Slot-Finder, Konfliktfreiheit). Teil 3: Store (JSON-Roundtrip in temporärem Ordner).
-/// Teil 4: Ansichtsmodus (SelfTestViewMode.swift).
+/// Teil 4: Ansichtsmodus (SelfTestViewMode.swift). Teil 5: Ecken-Geometrie, Verzögerung, Settings-Roundtrip
+/// (SelfTestSettings.swift).
 final class SelfTestChecker {
     private(set) var total = 0
     private(set) var failures = 0
@@ -27,6 +28,7 @@ enum SelfTest {
         LayoutSelfTest.run(t)
         StoreSelfTest.run(t)
         ViewModeSelfTest.run(t)
+        SettingsSelfTest.run(t)
         print("\(t.total - t.failures)/\(t.total) PASS" + (t.failures == 0 ? "" : ", \(t.failures) FAIL"))
         fflush(stdout)
         return t.failures == 0
