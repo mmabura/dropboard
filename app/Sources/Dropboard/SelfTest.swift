@@ -29,6 +29,7 @@ enum SelfTest {
         StoreSelfTest.run(t)
         ViewModeSelfTest.run(t)
         SettingsSelfTest.run(t)
+        FixASelfTest.run(t)
         FixBSelfTest.run(t)
         FixCSelfTest.run(t)
         print("\(t.total - t.failures)/\(t.total) PASS" + (t.failures == 0 ? "" : ", \(t.failures) FAIL"))

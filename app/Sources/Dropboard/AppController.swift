@@ -50,6 +50,7 @@ final class AppController: NSObject, NSApplicationDelegate, StatusMenuHost {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        boardController?.flushPendingSaves()   // P10: eingereihte board.json-Schreibvorgänge abschließen
         Log.flush()   // P7: asynchrones Log vollständig schreiben
     }
 

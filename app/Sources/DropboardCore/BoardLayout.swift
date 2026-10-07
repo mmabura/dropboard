@@ -115,6 +115,42 @@ public enum BoardLayout {
         return CGSize(width: CGFloat(max(1, (w * k).rounded())), height: CGFloat(max(1, (h * k).rounded())))
     }
 
+    /// Pixelgröße nach Anwendung der EXIF/TIFF-Orientierung (C7). Werte 5–8 drehen um 90°, Breite und Höhe
+    /// tauschen. Fehlende oder unbekannte Werte verhalten sich wie 1 (unverändert).
+    public static func orientedPixelSize(width: Int, height: Int, orientation: Int) -> (width: Int, height: Int) {
+        (5...8).contains(orientation) ? (height, width) : (width, height)
+    }
+
+    /// Gespeicherte Anzeigegröße gegen die orientierte Pixelgröße prüfen (C7: ältere Einträge haben evtl. das
+    /// ungedrehte Seitenverhältnis gespeichert). Passt das Seitenverhältnis bis auf Rundung (±1 pt), bleibt
+    /// `stored` exakt; sonst neu eingepasst mit derselben längsten Kante.
+    public static func reconciledSize(stored: CGSize, orientedPixelWidth: Int, orientedPixelHeight: Int) -> CGSize {
+        let longest = Double(max(stored.width, stored.height))
+        guard longest > 0,
+              let refit = fittedSize(pixelWidth: orientedPixelWidth, pixelHeight: orientedPixelHeight, longestEdge: longest)
+        else { return stored }
+        if abs(refit.width - stored.width) <= 1 && abs(refit.height - stored.height) <= 1 { return stored }
+        return refit
+    }
+
+    /// C11: Mittelpunkte so verschieben, dass jeder Rahmen in `area` liegt (wie clampCenter; passt ein Rahmen
+    /// nicht hinein, die Mitte von `area`). Items, die schon drin liegen, bleiben bitgenau. Reine Layout-Logik,
+    /// keine Bildschirm-Kenntnis. Rückgabe: ids der verschobenen Items. Leere/ungültige Fläche: nichts passiert.
+    @discardableResult
+    public static func clampIntoArea(_ items: inout [BoardItem], area: CGRect) -> [UUID] {
+        guard area.width > 0, area.height > 0 else { return [] }
+        var moved: [UUID] = []
+        for i in items.indices {
+            let center = items[i].center.cgPoint
+            let clamped = clampCenter(center, size: items[i].size.cgSize, area: area)
+            if clamped != center {
+                items[i].center = BoardPoint(clamped)
+                moved.append(items[i].id)
+            }
+        }
+        return moved
+    }
+
     /// Zufallsrotation: Betrag in `range`, Vorzeichen zufällig. Zieht genau zwei Zufallswerte.
     public static func randomTilt<G: RandomNumberGenerator>(range: ClosedRange<Double>, using rng: inout G) -> Double {
         let magnitude = rng.nextDouble(in: range.lowerBound, range.upperBound)

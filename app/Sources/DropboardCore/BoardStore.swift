@@ -15,7 +15,7 @@ public enum BoardStoreError: Error, CustomStringConvertible {
 ///   <boardDirectory>/board.json        Layout (Codable, atomisch geschrieben)
 ///   <boardDirectory>/images/<uuid>.<ext>  Bildkopien
 ///   <boardDirectory>/incoming/<uuid>/  Zielordner für File-Promises (danach nach images/ verschoben)
-public struct BoardStore {
+public struct BoardStore: Sendable {
     public static let documentFileName = "board.json"
     public static let fallbackExtension = "png"
 
@@ -79,6 +79,28 @@ public struct BoardStore {
         return target
     }
 
+    /// Laden mit Quarantäne (C20). Siehe `resolveLoad`.
+    public func loadOrQuarantine(now: Date = Date()) -> BoardLoadOutcome {
+        Self.resolveLoad(load: { try load() }, quarantine: { try quarantineDocument(now: now) })
+    }
+
+    /// Reine Entscheidung (testbar mit Closures):
+    ///   lesbar                      → .loaded
+    ///   nicht lesbar, umbenannt     → .quarantined  (leer starten, Speichern erlaubt – die alte Datei ist gesichert)
+    ///   nicht lesbar, Umbenennen scheitert → .unrecoverable (leer starten, Speichern GESPERRT: sonst würde das
+    ///                                        nächste Speichern die nicht gesicherte board.json überschreiben)
+    public static func resolveLoad(load: () throws -> BoardDocument, quarantine: () throws -> URL) -> BoardLoadOutcome {
+        do {
+            return .loaded(try load())
+        } catch let loadError {
+            do {
+                return .quarantined(error: loadError, movedTo: try quarantine())
+            } catch let quarantineError {
+                return .unrecoverable(error: loadError, quarantineError: quarantineError)
+            }
+        }
+    }
+
     public static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -90,5 +112,59 @@ public struct BoardStore {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
+    }
+}
+
+/// Ergebnis von `BoardStore.loadOrQuarantine()`.
+public enum BoardLoadOutcome {
+    case loaded(BoardDocument)
+    case quarantined(error: Error, movedTo: URL)
+    case unrecoverable(error: Error, quarantineError: Error)
+
+    /// Startdokument: geladen oder leer.
+    public var document: BoardDocument {
+        if case .loaded(let document) = self { return document }
+        return BoardDocument()
+    }
+
+    /// Darf diese Sitzung board.json schreiben? Nein nur bei `.unrecoverable` (C20).
+    public var allowsSaving: Bool {
+        if case .unrecoverable = self { return false }
+        return true
+    }
+}
+
+/// P10: Kodieren und atomisches Schreiben von board.json auf einer seriellen Hintergrund-Queue.
+/// Der Aufrufer übergibt einen Wert-Snapshot des Dokuments (Struct-Kopie); Schreibreihenfolge = Aufrufreihenfolge,
+/// das zuletzt übergebene Dokument liegt also am Ende auf der Platte. `completion` läuft auf der Queue,
+/// direkt nach dem Schreiben – dort darf der Aufrufer Folgearbeit anhängen, die erst nach erfolgreichem
+/// Speichern passieren darf (C10: Bilddatei nach trash/), sie bleibt in derselben Reihenfolge.
+public final class BoardSaveQueue: @unchecked Sendable {
+    // @unchecked: einzige gespeicherte Eigenschaft ist die (thread-sichere) DispatchQueue.
+    private let queue: DispatchQueue
+
+    public init(label: String = "Dropboard.save") {
+        queue = DispatchQueue(label: label, qos: .utility)
+    }
+
+    /// Erfolg: Dauer in ms (Kodieren + Schreiben).
+    public func save(_ document: BoardDocument, to store: BoardStore,
+                     completion: @escaping @Sendable (Result<Double, Error>) -> Void) {
+        queue.async {
+            let start = DispatchTime.now().uptimeNanoseconds
+            do {
+                try store.save(document)
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+                completion(.success(ms))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// Wartet, bis alle bis jetzt eingereihten Schreibvorgänge (inkl. completion) fertig sind.
+    /// Für Beenden und Selftests; nicht im Drag-Pfad aufrufen.
+    public func flush() {
+        queue.sync {}
     }
 }

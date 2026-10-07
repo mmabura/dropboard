@@ -4,6 +4,8 @@ import Foundation
 ///   --handoff two-panels|grow   Übergabe-Variante (Default: DropboardConfig.defaultHandoff)
 ///   --board-dir <pfad>          alternativer Board-Ordner (Tests)
 ///   --reduce-motion             „Bewegung reduzieren“ erzwingen (zusätzlich zur Systemeinstellung)
+///   --diag-pasteboard           Diagnose: voller Pasteboard-Dump (liest Daten aller Typen!) und
+///                               Lebensdauer-Checks der Quelldateien nach dem Drop (P1/C6/P9). Sonst nur Typnamen.
 ///   --selftest                  Logik-Assertions, kein Fenster, Exit 0/1
 ///   --snapshot <pfad.png>       Board + Eselsohr offscreen als PNG, dann beenden
 ///   --snapshot-demo             mit --snapshot: 5 Platzhalterbilder in einem temporären Board
@@ -16,12 +18,17 @@ struct LaunchOptions {
     var snapshotPath: String?
     var snapshotDemo = false
     var snapshotDimmed = false
+    var diagPasteboard = false
+
+    static let diagPasteboardFlag = "--diag-pasteboard"
+    /// Direkt aus den Prozess-Argumenten (ImageImporter liest das ohne Umweg über AppController).
+    static let diagPasteboardRequested: Bool = CommandLine.arguments.contains(diagPasteboardFlag)
 
     struct ParseError: Error {
         let message: String
     }
 
-    static let usage = "Dropboard [--handoff two-panels|grow] [--board-dir <pfad>] [--reduce-motion] "
+    static let usage = "Dropboard [--handoff two-panels|grow] [--board-dir <pfad>] [--reduce-motion] [--diag-pasteboard] "
         + "| --selftest | --snapshot <pfad.png> [--snapshot-demo] [--snapshot-dimmed] [--board-dir <pfad>]"
 
     static func parse(_ args: [String]) throws -> LaunchOptions {
@@ -40,6 +47,8 @@ struct LaunchOptions {
                 o.snapshotDimmed = true
             case "--reduce-motion":
                 o.forceReduceMotion = true
+            case diagPasteboardFlag:
+                o.diagPasteboard = true
             case "--handoff", "--snapshot", "--board-dir":
                 guard i + 1 < args.count else { throw ParseError(message: "\(a) braucht einen Wert") }
                 let value = args[i + 1]

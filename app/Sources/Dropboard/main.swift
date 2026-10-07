@@ -27,7 +27,8 @@ signal(SIGINT, SIG_IGN)
 let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
 sigintSource.setEventHandler {
     Log.line("[WIN]", "Ctrl-C – Dropboard beendet")
-    exit(0)
+    // über applicationWillTerminate: eingereihte Speichervorgänge und Log abschließen (Handler läuft auf .main)
+    MainActor.assumeIsolated { NSApplication.shared.terminate(nil) }
 }
 sigintSource.resume()
 

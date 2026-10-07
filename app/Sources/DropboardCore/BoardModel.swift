@@ -8,7 +8,7 @@ import CoreGraphics
 // und Inhalte bleiben oben links verankert, wenn sich die Bildschirmhöhe ändert.
 // Die Umrechnung in Layer-Koordinaten (y nach oben) passiert an genau einer Stelle (BoardScene).
 
-public struct BoardPoint: Codable, Equatable {
+public struct BoardPoint: Codable, Equatable, Sendable {
     public var x: Double
     public var y: Double
 
@@ -25,7 +25,7 @@ public struct BoardPoint: Codable, Equatable {
     public var cgPoint: CGPoint { CGPoint(x: CGFloat(x), y: CGFloat(y)) }
 }
 
-public struct BoardSize: Codable, Equatable {
+public struct BoardSize: Codable, Equatable, Sendable {
     public var width: Double
     public var height: Double
 
@@ -43,25 +43,31 @@ public struct BoardSize: Codable, Equatable {
 }
 
 /// Herkunft eines Bildes, soweit beim Drop bekannt.
-public struct ItemSource: Codable, Equatable {
+/// Abwärtskompatibel: alle Felder außer `route` sind optional; der synthetisierte Codable-Code liest fehlende
+/// Schlüssel als nil (decodeIfPresent) und schreibt nil-Felder nicht (encodeIfPresent). Alte board.json laden weiter.
+public struct ItemSource: Codable, Equatable, Sendable {
     /// "promise", "fileURL" oder "imageData"
     public var route: String
     /// Quellpfad (nur Weg fileURL)
     public var originalPath: String?
-    /// Ursprünglicher Dateiname (Promise: erster Eintrag von fileNames)
+    /// Ursprünglicher Dateiname (Promise: Name der gelieferten Datei, je Datei)
     public var originalName: String?
     /// Bundle-ID der vordersten App beim Drop (die Ursprungs-App)
     public var app: String?
+    /// Web-Herkunft (B8): `public.url` bzw. NSURL aus dem Drag-Pasteboard, nur http/https/ftp. Neu; in alten Dateien nil.
+    public var originalURL: String?
 
-    public init(route: String, originalPath: String? = nil, originalName: String? = nil, app: String? = nil) {
+    public init(route: String, originalPath: String? = nil, originalName: String? = nil, app: String? = nil,
+                originalURL: String? = nil) {
         self.route = route
         self.originalPath = originalPath
         self.originalName = originalName
         self.app = app
+        self.originalURL = originalURL
     }
 }
 
-public struct BoardItem: Codable, Equatable, Identifiable {
+public struct BoardItem: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     /// Dateiname in images/ (`<uuid>.<ext>`)
     public var fileName: String
@@ -90,7 +96,7 @@ public struct BoardItem: Codable, Equatable, Identifiable {
     public var frame: CGRect { BoardLayout.frame(center: center.cgPoint, size: size.cgSize) }
 }
 
-public struct BoardDocument: Codable, Equatable {
+public struct BoardDocument: Codable, Equatable, Sendable {
     public static let currentVersion = 1
 
     public var version: Int
@@ -119,6 +125,34 @@ public struct BoardDocument: Codable, Equatable {
     public mutating func remove(id: UUID) -> BoardItem? {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return nil }
         return items.remove(at: i)
+    }
+
+    /// Position in der Stapelreihenfolge.
+    public func index(id: UUID) -> Int? {
+        items.firstIndex { $0.id == id }
+    }
+
+    /// Wieder einfügen (Rückrollen eines Löschens, C10). `index` wird auf 0...items.count begrenzt.
+    /// Gibt es die id schon, wird nur ersetzt (kein Duplikat).
+    public mutating func insert(_ item: BoardItem, at index: Int) {
+        if let i = items.firstIndex(where: { $0.id == item.id }) {
+            items[i] = item
+            return
+        }
+        items.insert(item, at: min(max(0, index), items.count))
+    }
+
+    /// Entfernt alle Items, auf die `shouldRemove` zutrifft (C9: Bilddatei fehlt). Reihenfolge der übrigen bleibt.
+    /// Rückgabe: die entfernten Items in ihrer bisherigen Reihenfolge.
+    @discardableResult
+    public mutating func removeItems(where shouldRemove: (BoardItem) throws -> Bool) rethrows -> [BoardItem] {
+        var kept: [BoardItem] = []
+        var removed: [BoardItem] = []
+        for item in items {
+            if try shouldRemove(item) { removed.append(item) } else { kept.append(item) }
+        }
+        items = kept
+        return removed
     }
 }
 
