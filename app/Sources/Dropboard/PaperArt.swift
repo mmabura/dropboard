@@ -25,9 +25,12 @@ enum PaperArt {
 
     /// Eselsohr als umgeknicktes Papiereck: sichtbar ist die Lasche (Dreieck mit rechtem Winkel unten links,
     /// Falz von oben links nach unten rechts), das Dreieck oben rechts ist „weg“ (transparent).
-    /// Gleiches Papier wie das Board (Rückseite etwas dunkler) mit derselben Noise, kein Schatten.
+    /// Die Lasche zeigt die Papier-Rückseite (etwas dunkler und kühler als das Board), mit derselben Noise, Falzband,
+    /// Falzlinie und hellem Haarstrich; kein Schatten.
     // ⚠️ VERIFIZIEREN: CGMutablePath, clip(), strokePath() und setAlpha() kommen in keinem Spike vor
     // (Standard-CoreGraphics). Prüfen per `--snapshot`: Datei `<pfad>-ear.png`.
+    // ⚠️ VERIFIZIEREN: Falzband und heller Haarstrich (Clip + Strokes, Offset um 1 pt) sind rein rechnerisch ausgelegt,
+    // Wirkung auf dem Mac im Snapshot prüfen (ob die Lasche als Rückseite einer Papierecke liest).
     static func earImage(size: CGSize, scale: CGFloat, noiseTile: CGImage?) -> CGImage? {
         let w = Int((size.width * scale).rounded()), h = Int((size.height * scale).rounded())
         guard w > 0, h > 0, let cs = CGColorSpace(name: CGColorSpace.sRGB),
@@ -65,10 +68,32 @@ enum PaperArt {
         ctx.setLineWidth(1)
         ctx.strokePath()
 
-        // Falzlinie (1 pt)
+        // Falz: Diagonale von oben links nach unten rechts
         let fold = CGMutablePath()
         fold.move(to: CGPoint(x: 0, y: H))
         fold.addLine(to: CGPoint(x: W, y: 0))
+
+        // 1) schmales Band (3 pt) auf der Lasche entlang des Falzes, nur innerhalb der Lasche (Clip), flach, kein Verlauf
+        ctx.saveGState()
+        ctx.addPath(flap)
+        ctx.clip()
+        ctx.addPath(fold)
+        ctx.setStrokeColor(PaperStyle.cgColor(PaperStyle.graphiteHex, alpha: PaperStyle.earFoldBandAlpha))
+        ctx.setLineWidth(6 * scale)   // halbe Breite (3 pt) liegt innerhalb des Clips
+        ctx.strokePath()
+
+        // 2) heller Haarstrich (1 pt) direkt neben der Falzlinie auf der Laschenseite (Normale (-1,-1)/√2, Abstand 1 pt)
+        let off = scale * 0.7071
+        let highlight = CGMutablePath()
+        highlight.move(to: CGPoint(x: -off, y: H - off))
+        highlight.addLine(to: CGPoint(x: W - off, y: -off))
+        ctx.addPath(highlight)
+        ctx.setStrokeColor(PaperStyle.cgColor(0xFFFFFF, alpha: PaperStyle.earFoldHighlightAlpha))
+        ctx.setLineWidth(max(1, scale))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        // 3) Falzlinie (1 pt)
         ctx.addPath(fold)
         ctx.setStrokeColor(PaperStyle.cgColor(PaperStyle.graphiteHex, alpha: PaperStyle.earFoldAlpha))
         ctx.setLineWidth(max(1, scale))
